@@ -59,8 +59,10 @@ def compute_embeddings(model, sequences, tokenizer, device, batch_size=32, max_l
             autocast_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if use_autocast else nullcontext()
             with autocast_ctx:
                 model_output = model(input_ids=input_ids, attention_mask=attention_mask)
-        attention_mask = attention_mask.unsqueeze(-1)
-        embeddings = torch.sum(model_output.last_hidden_state * attention_mask, 1) / torch.sum(attention_mask, 1)
+        # Remove CLS token (position 0), then mean-pool non-padding tokens
+        token_embeddings = model_output.last_hidden_state[:, 1:, :]
+        token_mask = attention_mask[:, 1:].unsqueeze(-1).to(token_embeddings.dtype)
+        embeddings = torch.sum(token_embeddings * token_mask, 1) / torch.sum(token_mask, 1)
         all_embeddings.append(embeddings.cpu())
     pbar.close()
     

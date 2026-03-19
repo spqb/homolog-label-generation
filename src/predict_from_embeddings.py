@@ -100,7 +100,6 @@ def main(args):
     with h5py.File(args.output_path, 'w') as f:
         # Save top-level arrays
         f.create_dataset('headers', data=h_test.astype('S'))  # Convert strings to bytes for HDF5
-        f.create_dataset('embeddings', data=X_test)
         if y_test is not None:
             f.create_dataset('labels_true', data=y_test.astype('S') if y_test.dtype.kind in ('U', 'O') else y_test)
         
@@ -117,7 +116,6 @@ def main(args):
     print(f"Successfully saved predictions to {args.output_path}")
     print("\nResults structure (HDF5):")
     print("  - headers: test sequence headers (stored as bytes)")
-    print("  - embeddings: test embeddings")
     print("  - labels_true: true labels (if available)")
     print("  - predictions/")
     print("      - logreg/labels_pred, logreg/labels_probs")

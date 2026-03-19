@@ -2,6 +2,12 @@ import argparse
 import numpy as np
 import torch
 import os
+import sys
+
+src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+    
 from adabmDCA.fasta import get_tokens, encode_sequence
 from rbms.utils import get_saved_updates
 from rbms.io import load_params
@@ -61,10 +67,10 @@ def main(config):
     print(f"Using {len(tokens)} tokens for encoding")
     
     # Load RBM model
-    print(f"Loading RBM model from {config['rbm_model_path']}...")
-    saved_updates = get_saved_updates(filename=config["rbm_model_path"])
-    #params, *_ = load_model(filename=config["rbm_model_path"], index=saved_updates[-1], device=device, dtype=dtype)
-    params = load_params(filename=config["rbm_model_path"], index=saved_updates[-1], device=device, dtype=dtype)
+    print(f"Loading RBM model from {config['model']}...")
+    saved_updates = get_saved_updates(filename=config["model"])
+    #params, *_ = load_model(filename=config["model"], index=saved_updates[-1], device=device, dtype=dtype)
+    params = load_params(filename=config["model"], index=saved_updates[-1], device=device, dtype=dtype)
     print("RBM model loaded successfully")
     
     print(f"Loading input dataset from {config['query']}...")

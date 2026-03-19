@@ -1,6 +1,12 @@
 import argparse
 import numpy as np
 import os
+import sys
+
+src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if src_path not in sys.path:
+    sys.path.insert(0, src_path)
+
 from adabmDCA.fasta import get_tokens, encode_sequence
 from utils import load_query_data
 

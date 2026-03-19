@@ -75,6 +75,7 @@ for num_samples_tot in NUMS_EXTRACTION_SAMPLES:
         else:
             train_pool_label_sampled = train_pool_label.sample(n=num_samples_label, random_state=args.seed, replace=False).reset_index(drop=True)
             train_pool_subset = pd.concat([train_pool_subset, train_pool_label_sampled], ignore_index=True)
+    train_pool_subset.to_csv(os.path.join(dirname, f"train_{num_samples_tot}.csv"), index=False)
             
 # extract test subsets. take the same number of samples for each label as the smallest class in the test pool
 test_pool_subset = pd.DataFrame()
@@ -86,6 +87,5 @@ for label in labels:
     else:
         test_pool_label_sampled = test_pool_label.sample(n=min_test_samples, random_state=args.seed, replace=False).reset_index(drop=True)
         test_pool_subset = pd.concat([test_pool_subset, test_pool_label_sampled], ignore_index=True)
-    
-    train_pool_subset.to_csv(os.path.join(dirname, f"train_{num_samples_tot}.csv"), index=False)
+
 test_pool_subset.to_csv(os.path.join(dirname, f"test.csv"), index=False)
