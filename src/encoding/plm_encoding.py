@@ -6,6 +6,7 @@ import json
 from contextlib import nullcontext
 from typing import Any
 import numpy as np
+import h5py
 from transformers import AutoTokenizer, AutoModel, AutoModelForMaskedLM
 from tqdm import tqdm
 
@@ -23,7 +24,8 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", type=str, default="facebook/esm2_t33_650M_UR50D", help="Model identifier.")
     parser.add_argument("--checkpoint", type=str, default=None, help="Optional path to a LoRA adapter checkpoint directory.")
     parser.add_argument("--query", type=str, default=None, help="Path to the query dataset in .csv or fasta format.")
-    parser.add_argument("--output", type=str, default="embeddings.esm2_t33_650M_UR50D.npz", help="Output file containing the query sequences embeddings.")
+    parser.add_argument("--output", type=str, default="embeddings.esm2_t33_650M_UR50D.h5", help="Output file containing the query sequences embeddings.")
+    parser.add_argument("--info", type=str, default="", help="Optional metadata string saved at the top level of the output .h5 file.")
     parser.add_argument("--column_sequences", type=str, default="sequence", help="Column name in the input .csv file containing the sequences.")
     parser.add_argument("--column_labels", type=str, default="label", help="Column name in the input .csv file containing the labels.")
     parser.add_argument("--column_headers", type=str, default="header", help="Column name in the input .csv file containing the sequence identifiers.")
@@ -152,12 +154,21 @@ def main(config):
         max_length=config["max_length"],
         use_bf16=use_bf16,
     ).numpy()
+
+    output_path = config["output"]
+    if output_path.split(".")[-1].lower() != "h5":
+        output_path += ".h5"
     
     print("Saving the query dataset's embeddings...")
-    if labels_query is not None:
-        np.savez_compressed(config["output"], embeddings=X_test, labels=labels_query, headers=headers_query)
-    else:
-        np.savez_compressed(config["output"], embeddings=X_test, headers=headers_query)
+    with h5py.File(output_path, "w") as f:
+        f.create_dataset("info", data=np.asarray(config.get("info", ""), dtype="S"))
+        f.create_dataset("embeddings", data=X_test)
+        f.create_dataset("headers", data=np.asarray(headers_query).astype("S"))
+        if labels_query is not None:
+            labels_array = np.asarray(labels_query)
+            if labels_array.dtype.kind in ("U", "O"):
+                labels_array = labels_array.astype("S")
+            f.create_dataset("labels", data=labels_array)
 
 if __name__ == "__main__":
     parser = get_parser()

@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import os
 import sys
+import h5py
 
 src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if src_path not in sys.path:
@@ -15,10 +16,11 @@ from utils import load_query_data
 
 
 def get_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Encodes aligned sequences using RBM embedding and saves them as npz files.")
+    parser = argparse.ArgumentParser(description="Encodes aligned sequences using RBM embedding and saves them as HDF5 archives.")
     parser.add_argument("--model", type=str, required=True, help="Path to the RBM model file.")
     parser.add_argument("--query", type=str, required=True, help="Path to the input dataset in .csv format.")
-    parser.add_argument("--output", type=str, default=None, help="Output file containing the RBM encoded sequences. If not provided, it will be saved with the same name as the input file but with .rbm.npz extension.")
+    parser.add_argument("--output", type=str, default=None, help="Output file containing the RBM encoded sequences. If not provided, it will be saved with the same name as the input file but with .rbm.h5 extension.")
+    parser.add_argument("--info", type=str, default="", help="Optional metadata string saved at the top level of the output .h5 file.")
     parser.add_argument("--column_sequences", type=str, default="sequence_align", help="Column name in the input .csv file containing the sequences.")
     parser.add_argument("--column_labels", type=str, default="label", help="Column name in the input .csv file containing the labels.")
     parser.add_argument("--column_headers", type=str, default="header", help="Column name in the input .csv file containing the sequence identifiers.")
@@ -85,7 +87,8 @@ def main(config):
     
     print(f"Loaded {len(sequences)} sequences from CSV file")
     if labels is not None:
-        print(f"Found labels with {len(np.unique(labels))} unique values")
+        labels_array = np.asarray(labels)
+        print(f"Found labels with {len(np.unique(labels_array))} unique values")
     
     # RBM encode sequences
     print("RBM encoding aligned sequences...")
@@ -97,23 +100,22 @@ def main(config):
         output_path = config["output"]
     else:
         output_prefix = os.path.splitext(config["query"])[0]
-        output_path = f"{output_prefix}.rbm.npz"
+        output_path = f"{output_prefix}.rbm.h5"
+
+    if output_path.split(".")[-1].lower() != "h5":
+        output_path += ".h5"
     
-    # Save to npz file
+    # Save to HDF5 archive
     print(f"Saving RBM encoding to {output_path}...")
-    if labels is not None:
-        np.savez_compressed(
-            output_path,
-            embeddings=rbm_embeddings,
-            labels=labels,
-            headers=headers
-        )
-    else:
-        np.savez_compressed(
-            output_path,
-            embeddings=rbm_embeddings,
-            headers=headers
-        )
+    with h5py.File(output_path, "w") as f:
+        f.create_dataset("info", data=np.asarray(config.get("info", ""), dtype="S"))
+        f.create_dataset("embeddings", data=rbm_embeddings)
+        f.create_dataset("headers", data=np.asarray(headers).astype("S"))
+        if labels is not None:
+            labels_array = np.asarray(labels)
+            if labels_array.dtype.kind in ("U", "O"):
+                labels_array = labels_array.astype("S")
+            f.create_dataset("labels", data=labels_array)
     
     print(f"Successfully saved RBM encoding to {output_path}")
     print("Done!")
