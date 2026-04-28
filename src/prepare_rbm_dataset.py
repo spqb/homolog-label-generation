@@ -148,6 +148,7 @@ def main(args) -> None:
             if not isinstance(classifier_group, h5py.Group):
                 raise ValueError(f"Classifier group '{classifier_name}' is invalid in {h5_path}")
             pred_labels = _decode_array(cast(np.ndarray, _require_dataset(classifier_group, "labels_pred", h5_path)[:]))
+            pred_labels = [str(label) for label in pred_labels]
 
             if len(test_headers) != len(pred_labels):
                 raise ValueError(f"Mismatch between test headers and predictions in {h5_path}")
@@ -167,7 +168,7 @@ def main(args) -> None:
 
                 if row["true_label"] != true_label:
                     raise ValueError(
-                        f"Inconsistent true_label for train header '{header}' in n_train={n_train}"
+                        f"Inconsistent true_label for train header '{header}' in n_train={n_train}. Previous: '{row['true_label']}', Current: '{true_label}' in {h5_path}. This can happen when repeated headers are present in the train set across different files, which is not allowed. Consider deduplicating headers or ensuring each header appears in only one file per n_train."
                     )
 
                 row[model_col] = true_label
@@ -187,7 +188,7 @@ def main(args) -> None:
 
                 if row["true_label"] != true_label:
                     raise ValueError(
-                        f"Inconsistent true_label for test header '{header}' in n_train={n_train}"
+                        f"Inconsistent true_label for test header '{header}' in n_train={n_train}. Previous: '{row['true_label']}', Current: '{true_label}' in {h5_path}. This can happen when repeated headers are present in the test set across different files, which is not allowed. Consider deduplicating headers or ensuring each header appears in only one file per n_train."
                     )
 
                 row[model_col] = pred_label

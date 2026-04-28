@@ -125,10 +125,10 @@ case "$EMBEDDING_MODEL" in
         ;;
     plm)
         SCRIPT_PATH="src/encoding/plm_encoding.py"
-        if [[ -z "$CHECKPOINT" ]]; then
-            echo "--checkpoint is required when --embedding_model plm." >&2
-            exit 1
-        fi
+        # if [[ -z "$CHECKPOINT" ]]; then
+        #     echo "--checkpoint is required when --embedding_model plm." >&2
+        #     exit 1
+        # fi
         ;;
     *)
         echo "Invalid --embedding_model '$EMBEDDING_MODEL'. Use onehot, rbm, or plm." >&2
