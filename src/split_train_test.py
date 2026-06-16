@@ -15,6 +15,7 @@ def parse_args():
     parser.add_argument("--num_samples_extraction", nargs='+', type=int, default=[5000, 2000, 1000, 500, 100], help="List of total number of samples to extract for training subsets.")
     parser.add_argument("--source_csv", type=str, help="Path to the source CSV file containing the dataset.")
     parser.add_argument("--output_dir", type=str, help="Directory to save the prepared splits.")
+    parser.add_argument("--min_data_per_label", type=int, default=10, help="Minimum number of training samples per label to keep a label in the training pool.")
     return parser.parse_args()
 
 args = parse_args()
@@ -80,13 +81,26 @@ for label in labels:
     test_pool = pd.concat([test_pool, test_df], ignore_index=True)
     train_pool = pd.concat([train_pool, train_df], ignore_index=True)
     
-# extract training subsets
+# labels to be excluded
+excluded_labels = []
+for num_samples_tot in NUMS_EXTRACTION_SAMPLES:
+    for label in labels:
+        train_pool_label = train_pool[train_pool['label'] == label].reset_index(drop=True)
+        test_pool_label = test_pool[test_pool['label'] == label].reset_index(drop=True)
+        if (len(train_pool_label) < args.min_data_per_label) or (len(test_pool_label) < args.min_data_per_label):
+            if label not in excluded_labels:
+                excluded_labels.append(label)
+print(f"Labels to be excluded from training and test pools due to insufficient samples (less than {args.min_data_per_label} samples in either pool): {excluded_labels}")
+
+# extract training subsets. take the same number of samples for each label as the smallest class in the training pool, up to the total number of samples specified in NUMS_EXTRACTION_SAMPLES
 for num_samples_tot in NUMS_EXTRACTION_SAMPLES:
     train_pool_subset = pd.DataFrame()
     for label in labels:
         num_samples_label = num_samples_tot // len(labels)
         train_pool_label = train_pool[train_pool['label'] == label].reset_index(drop=True)
-        if len(train_pool_label) <= num_samples_label:
+        if label in excluded_labels:
+            continue
+        elif len(train_pool_label) <= num_samples_label:
             train_pool_subset = pd.concat([train_pool_subset, train_pool_label], ignore_index=True)
         else:
             train_pool_label_sampled = train_pool_label.sample(n=num_samples_label, random_state=args.seed, replace=False).reset_index(drop=True)
@@ -95,8 +109,11 @@ for num_samples_tot in NUMS_EXTRACTION_SAMPLES:
             
 # extract test subsets. take the same number of samples for each label as the smallest class in the test pool
 test_pool_subset = pd.DataFrame()
-min_test_samples = test_pool['label'].value_counts().min()
+test_pool_filtered = test_pool[~test_pool['label'].isin(excluded_labels)].reset_index(drop=True)
+min_test_samples = test_pool_filtered['label'].value_counts().min()
 for label in labels:
+    if label in excluded_labels:
+        continue
     test_pool_label = test_pool[test_pool['label'] == label].reset_index(drop=True)
     if len(test_pool_label) <= min_test_samples:
         test_pool_subset = pd.concat([test_pool_subset, test_pool_label], ignore_index=True)

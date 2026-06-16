@@ -1,0 +1,26 @@
+name: delight
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - accelerate==1.9.0
+      - adabmdca==0.7.5
+      - annadca==0.2.2
+      - biopython==1.85
+      - datasets==4.0.0
+      - fair-esm==2.0.1
+      - h5py==3.14.0
+      - numpy==2.4.1
+      - pandas==2.3.1
+      - peft==0.16.0
+      - pyarrow==21.0.0
+      - pyyaml==6.0.2
+      - rbms==0.5.0
+      - scikit-learn==1.7.1
+      - scipy==1.16.0
+      - torch==2.9.1
+      - torchvision==0.24.1
+      - tqdm==4.67.1
+      - transformers==4.48.1

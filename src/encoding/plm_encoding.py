@@ -2,12 +2,11 @@ import argparse
 import torch
 import os
 import sys
-import json
 from contextlib import nullcontext
 from typing import Any
 import numpy as np
 import h5py
-from transformers import AutoTokenizer, AutoModel, AutoModelForMaskedLM
+from transformers import AutoTokenizer, AutoModel
 from tqdm import tqdm
 
 # Add parent directory to path to import train modules
@@ -22,7 +21,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Encodes sequences using a pre-trained protein language model.")
     parser.add_argument("--model", type=str, default="facebook/esm2_t33_650M_UR50D", help="Model identifier.")
-    parser.add_argument("--checkpoint", type=str, default=None, help="Optional path to a LoRA adapter checkpoint directory.")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Optional path to a fine-tuned backbone directory.")
     parser.add_argument("--query", type=str, default=None, help="Path to the query dataset in .csv or fasta format.")
     parser.add_argument("--output", type=str, default="embeddings.esm2_t33_650M_UR50D.h5", help="Output file containing the query sequences embeddings.")
     parser.add_argument("--info", type=str, default="", help="Optional metadata string saved at the top level of the output .h5 file.")
@@ -93,42 +92,30 @@ def main(config):
         checkpoint = checkpoint.strip()
     if checkpoint:
         if not os.path.isdir(checkpoint):
-            raise ValueError(f"Invalid checkpoint path: '{checkpoint}'. Expected a directory containing LoRA adapter files.")
-        adapter_config_path = os.path.join(checkpoint, "adapter_config.json")
-        if not os.path.isfile(adapter_config_path):
-            raise ValueError(
-                f"Checkpoint '{checkpoint}' does not look like a LoRA adapter repository: missing 'adapter_config.json'."
-            )
+            raise ValueError(f"Invalid checkpoint path: '{checkpoint}'. Expected a fine-tuned backbone directory.")
 
-        with open(adapter_config_path, "r", encoding="utf-8") as f:
-            adapter_config = json.load(f)
-        auto_mapping = adapter_config.get("auto_mapping") or {}
-        base_model_class = str(auto_mapping.get("base_model_class", ""))
-        use_masked_lm_backbone = "ForMaskedLM" in base_model_class
+        load_path = checkpoint
+        config_path = os.path.join(load_path, "config.json")
+        if not os.path.isfile(config_path):
+            parent_path = os.path.abspath(os.path.join(load_path, os.pardir))
+            parent_config = os.path.join(parent_path, "config.json")
+            if os.path.isfile(parent_config):
+                load_path = parent_path
 
-        print("Loading model...")
-        if use_masked_lm_backbone:
-            print(f"Detected adapter trained on {base_model_class}; loading AutoModelForMaskedLM.")
-            model = AutoModelForMaskedLM.from_pretrained(config["model"])
-        else:
-            model = AutoModel.from_pretrained(config["model"])
-
+        print(f"Loading fine-tuned backbone from: {load_path}")
         try:
-            from peft import PeftModel
-        except ImportError as exc:
-            raise ImportError("The 'peft' package is required to load LoRA adapters. Install it or omit --checkpoint.") from exc
-
-        print(f"Loading LoRA adapters from: {checkpoint}")
-        peft_model = PeftModel.from_pretrained(model, checkpoint)
-
-        # Use the backbone encoder for sequence embeddings.
-        base_model: Any = peft_model.base_model.model
-        if hasattr(base_model, "esm"):
-            model = base_model.esm
-        elif hasattr(base_model, "bert"):
-            model = base_model.bert
-        else:
-            model = base_model
+            model = AutoModel.from_pretrained(load_path)
+        except ValueError:
+            base_model_id = config.get("model")
+            if not base_model_id:
+                raise
+            print(f"Falling back to base model '{base_model_id}' and loading weights from {load_path}.")
+            model = AutoModel.from_pretrained(base_model_id)
+            weights_path = os.path.join(load_path, "pytorch_model.bin")
+            if not os.path.isfile(weights_path):
+                raise FileNotFoundError(f"Missing weights file: {weights_path}")
+            state = torch.load(weights_path, map_location="cpu")
+            model.load_state_dict(state, strict=False)
     else:
         print("Loading model...")
         model = AutoModel.from_pretrained(config["model"])

@@ -145,6 +145,8 @@ def main(args):
     # Save results to HDF5
     if args.output_path.split('.')[-1] != 'h5':
         args.output_path += '.h5'
+    if os.path.isfile(args.output_path):
+        os.remove(args.output_path)
     print(f"\nSaving predictions to {args.output_path}...")
     with h5py.File(args.output_path, 'w') as f:
         f.create_dataset('info', data=np.asarray(info, dtype='S'))
