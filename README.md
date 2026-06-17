@@ -40,7 +40,6 @@ For the `RR` dataset, the pipeline also includes supervised ESM2 fine-tuning whe
 
 - `src/pipeline/run_experiments.sh`: run all configured experiments
 - `src/pipeline/run_case.sh`: run a single dataset / seed / threshold case
-- `src/pipeline/run_experiments_smoke.sh`: run a small isolated smoke test into `tmp/smoke_outputs` and `tmp/smoke_models`
 
 ## Installation
 
@@ -54,24 +53,31 @@ conda env create -f environment.yml
 conda activate delight
 ```
 
-After the data archive becomes available, create the `data/` directory from the
-Zenodo package before running the pipeline.
+Download the data and RBM embedding checkpoints from Zenodo:
+
+```bash
+wget https://zenodo.org/records/20719564/files/Data_delight.zip
+```
+
+This downloads a zip archive named `Data_delight.zip`. Once the download has
+finished, create the local `data/` and `models/` directories with:
+
+```bash
+./setup_data.sh Data_delight.zip
+```
+
+The setup script extracts the archive in a temporary directory, copies the
+datasets into `data/`, copies the provided RBM checkpoints into `models/`, and
+removes the temporary files when it finishes. Existing `data/` or `models/`
+directories are not overwritten unless the script is run with `--force`.
 
 ## Running the pipeline
 
-Run all configured experiments:
+Run all configured experiments (this operation will take a lot of time!):
 
 ```bash
 src/pipeline/run_experiments.sh
 ```
-
-Run a single isolated smoke test without touching the main `outputs/` and `models/` trees:
-
-```bash
-src/pipeline/run_experiments_smoke.sh
-```
-
-The smoke configuration currently targets one `RR` case and is intended only to validate that the full pipeline executes coherently.
 
 ## Analysis and plots
 
@@ -102,7 +108,7 @@ The scripts assume that the corresponding pipeline outputs already exist under `
 ## Notes
 
 - The repository does **not** include the `models/` and `outputs/` folders used in the experiments, because these artifacts are too large to distribute through the repository.
-- The `data/` folder is expected to be created from an external Zenodo archive. The download link will be added once it is available.
+- The `data/` and `models/` folders are expected to be created from the external Zenodo archive with `setup_data.sh`.
 - The conditioned-generation branch is active only for the `RR` dataset in the current pipeline configuration.
 - The code expects the external tools and Python dependencies required by the embedding, classification, and RBM stages to be available in the execution environment.
 - The repository is intended to contain the code and documentation needed to reproduce the experiments once the external data and model artifacts are available.
