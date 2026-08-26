@@ -12,8 +12,8 @@ import seaborn as sns
 from common import METHOD_LABELS, REPO_ROOT, average_multiclass_roc, find_prediction_files, load_prediction_file, predictions_to_dataframe
 
 
-DEFAULT_METHODS = ["onehot", "rbm", "plm"]
-DEFAULT_METHODS_RR = ["onehot", "rbm", "plm", "plm_supervised"]
+DEFAULT_METHODS = ["onehot", "rbm", "esm2", "esmc"]
+DEFAULT_METHODS_RR = ["onehot", "rbm", "esm2", "esmc", "esm2_supervised"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,8 +96,9 @@ def plot_roc_summary(dataset: str, t1: str, seeds: list[int], num_train_samples:
     colors = {
         "onehot": "#f96363",
         "rbm": "#ffb400",
-        "plm": "#00b170",
-        "plm_supervised": "#007acc",
+        "esm2": "#00b170",
+        "esmc": "#8e63ce",
+        "esm2_supervised": "#007acc",
     }
 
     for model_id in methods:

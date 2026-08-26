@@ -53,7 +53,7 @@ for config_file in "${config_files[@]}"; do
         exit 1
     fi
 
-    unset DATASET_NAME SOURCE_CSV RBM_MODEL_PATH SEEDS T1_VALUES SUPERVISED_PLM_ENABLED SUPERVISED_PLM_MIN_NTRAIN
+    unset DATASET_NAME SOURCE_CSV RBM_MODEL_PATH SEEDS T1_VALUES ESM2_MODEL ESMC_MODEL SUPERVISED_PLM_ENABLED SUPERVISED_PLM_MIN_NTRAIN
     # shellcheck source=/dev/null
     source "$config_file"
 
@@ -65,6 +65,8 @@ for config_file in "${config_files[@]}"; do
 
     supervised_plm_enabled="${SUPERVISED_PLM_ENABLED:-0}"
     supervised_plm_min_ntrain="${SUPERVISED_PLM_MIN_NTRAIN:-1000}"
+    esm2_model="${ESM2_MODEL:-facebook/esm2_t33_650M_UR50D}"
+    esmc_model="${ESMC_MODEL:-biohub/ESMC-600M}"
 
     for seed in "${SEEDS[@]}"; do
         for t1 in "${T1_VALUES[@]}"; do
@@ -76,6 +78,8 @@ for config_file in "${config_files[@]}"; do
                 --rbm_model_path "$RBM_MODEL_PATH" \
                 --outputs_root "$OUTPUTS_ROOT" \
                 --models_root "$MODELS_ROOT" \
+                --esm2_model "$esm2_model" \
+                --esmc_model "$esmc_model" \
                 --supervised_plm_enabled "$supervised_plm_enabled" \
                 --supervised_plm_min_ntrain "$supervised_plm_min_ntrain"
         done

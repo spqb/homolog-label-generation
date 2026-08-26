@@ -15,8 +15,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 METHOD_LABELS = {
     "onehot": "One-hot",
     "rbm": "RBM",
-    "plm": "Foundation",
-    "plm_supervised": "Fine-tuned",
+    "esm2": "ESM2 650M",
+    "esmc": "ESM C 600M",
+    "esm2_supervised": "Fine-tuned ESM2",
     "true": "True",
     "onlytrain": "Train-only",
 }

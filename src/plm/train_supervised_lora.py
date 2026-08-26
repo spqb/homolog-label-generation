@@ -19,10 +19,12 @@ from transformers import AutoModel, AutoTokenizer
 from transformers import EarlyStoppingCallback, TrainerCallback
 from transformers import DataCollatorWithPadding, Trainer, TrainingArguments
 
+from pooling import boundary_special_token_ids, residue_mean_pool
+
 
 class ESMSequenceClassifier(nn.Module):
     """
-    Sequence classifier with mean pooling over token embeddings after removing CLS token.
+    Sequence classifier with mean pooling over amino-acid token embeddings.
 
     Head architecture:
       Dropout -> Dense -> Tanh -> Dropout -> Dense -> Softmax
@@ -32,6 +34,7 @@ class ESMSequenceClassifier(nn.Module):
         self,
         backbone_name: str,
         num_labels: int,
+        special_token_ids: List[int],
         dropout: float = 0.1,
         lora_rank: int = 8,
         lora_alpha: int = 16,
@@ -51,6 +54,7 @@ class ESMSequenceClassifier(nn.Module):
         )
         self.backbone = get_peft_model(backbone, lora_config)
         self.num_labels = num_labels
+        self.special_token_ids = special_token_ids
 
         # self.classifier = nn.Sequential(
         #     nn.Dropout(dropout),
@@ -65,10 +69,12 @@ class ESMSequenceClassifier(nn.Module):
     def forward(self, input_ids, attention_mask, labels=None):
         outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
 
-        # Remove CLS token (position 0), then mean-pool non-padding tokens
-        token_embeddings = outputs.last_hidden_state[:, 1:, :]
-        token_mask = attention_mask[:, 1:].unsqueeze(-1).to(token_embeddings.dtype)
-        pooled = (token_embeddings * token_mask).sum(dim=1) / token_mask.sum(dim=1).clamp(min=1e-9)
+        pooled = residue_mean_pool(
+            outputs.last_hidden_state,
+            input_ids,
+            attention_mask,
+            self.special_token_ids,
+        )
 
         logits = self.classifier(pooled)
         probabilities = self.softmax(logits)
@@ -199,13 +205,6 @@ def _extract_logits(predictions) -> torch.Tensor:
     return torch.tensor(raw_logits)
 
 
-def _mean_pool(outputs, attention_mask: torch.Tensor) -> torch.Tensor:
-    token_embeddings = outputs.last_hidden_state[:, 1:, :]
-    token_mask = attention_mask[:, 1:].unsqueeze(-1).to(token_embeddings.dtype)
-    pooled = (token_embeddings * token_mask).sum(dim=1) / token_mask.sum(dim=1).clamp(min=1e-9)
-    return pooled
-
-
 def _embed_dataset(
     dataset: Dataset,
     tokenizer: AutoTokenizer,
@@ -229,12 +228,13 @@ def _embed_dataset(
     backbone.eval()
 
     pooled_outputs: List[np.ndarray] = []
+    special_token_ids = boundary_special_token_ids(tokenizer)
     with torch.no_grad():
         for batch in tqdm(loader, desc="Embedding", leave=False):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             outputs = backbone(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
-            pooled = _mean_pool(outputs, attention_mask)
+            pooled = residue_mean_pool(outputs.last_hidden_state, input_ids, attention_mask, special_token_ids)
             pooled_outputs.append(pooled.cpu().numpy())
 
     return np.concatenate(pooled_outputs, axis=0)
@@ -346,6 +346,7 @@ def main(args):
     model = ESMSequenceClassifier(
         backbone_name=args.backbone,
         num_labels=len(label2id),
+        special_token_ids=boundary_special_token_ids(tokenizer),
         dropout=args.dropout,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,

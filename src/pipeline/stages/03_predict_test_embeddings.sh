@@ -7,23 +7,40 @@ usage() {
 Usage:
   src/pipeline/stages/03_predict_test_embeddings.sh \
     --embeddings_dir <path> \
-    --predictions_dir <path>
+    --predictions_dir <path> \
+    [--models <model-id> ...]
 
 Pairs train/test embedding HDF5 files and writes test prediction HDF5 files.
+When --models is supplied, only those embedding models are processed.
 EOF
 }
 
 EMBEDDINGS_DIR=""
 PREDICTIONS_DIR=""
+MODELS=()
+MODELS_FILTER_SET=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --embeddings_dir) EMBEDDINGS_DIR="$2"; shift 2 ;;
         --predictions_dir) PREDICTIONS_DIR="$2"; shift 2 ;;
+        --models)
+            MODELS_FILTER_SET=1
+            shift
+            while [[ $# -gt 0 && "$1" != --* ]]; do
+                MODELS+=("$1")
+                shift
+            done
+            ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
 done
+
+if [[ $MODELS_FILTER_SET -eq 1 && ${#MODELS[@]} -eq 0 ]]; then
+    echo "--models requires at least one model id." >&2
+    exit 1
+fi
 
 if [[ -z "$EMBEDDINGS_DIR" || -z "$PREDICTIONS_DIR" ]]; then
     echo "Missing required arguments." >&2
@@ -37,6 +54,19 @@ if [[ ! -d "$EMBEDDINGS_DIR" ]]; then
 fi
 
 mkdir -p "$PREDICTIONS_DIR"
+
+model_is_selected() {
+    local candidate="$1" selected_model
+    if [[ ${#MODELS[@]} -eq 0 ]]; then
+        return 0
+    fi
+    for selected_model in "${MODELS[@]}"; do
+        if [[ "$candidate" == "$selected_model" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
 
 shopt -s nullglob
 h5_files=("$EMBEDDINGS_DIR"/*.h5)
@@ -90,6 +120,10 @@ for train_path in "${h5_files[@]}"; do
 
     ntrain="${BASH_REMATCH[1]}"
     model="${BASH_REMATCH[2]}"
+
+    if ! model_is_selected "$model"; then
+        continue
+    fi
 
     if [[ "$model" == "supervised" ]]; then
         test_path="${TEST_BY_MODEL_AND_N["supervised:${ntrain}"]:-}"

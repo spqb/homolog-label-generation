@@ -15,6 +15,8 @@ Usage:
     --rbm_model_path <path> \
     [--outputs_root <path>] \
     [--models_root <path>] \
+    [--esm2_model <model-id>] \
+    [--esmc_model <model-id>] \
     [--supervised_plm_enabled 0|1] \
     [--supervised_plm_min_ntrain 1000]
 
@@ -37,6 +39,8 @@ OUTPUTS_ROOT="outputs"
 MODELS_ROOT="models"
 SUPERVISED_PLM_ENABLED=""
 SUPERVISED_PLM_MIN_NTRAIN=1000
+ESM2_MODEL="facebook/esm2_t33_650M_UR50D"
+ESMC_MODEL="biohub/ESMC-600M"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -47,6 +51,8 @@ while [[ $# -gt 0 ]]; do
         --rbm_model_path|--rbm_embedding_model) RBM_MODEL_PATH="$2"; shift 2 ;;
         --outputs_root) OUTPUTS_ROOT="$2"; shift 2 ;;
         --models_root) MODELS_ROOT="$2"; shift 2 ;;
+        --esm2_model) ESM2_MODEL="$2"; shift 2 ;;
+        --esmc_model) ESMC_MODEL="$2"; shift 2 ;;
         --supervised_plm_enabled) SUPERVISED_PLM_ENABLED="$2"; shift 2 ;;
         --supervised_plm_min_ntrain) SUPERVISED_PLM_MIN_NTRAIN="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -98,7 +104,9 @@ src/pipeline/stages/01_split_dataset.sh \
 src/pipeline/stages/02_embed_splits.sh \
     --splits_dir "$SPLITS_DIR" \
     --output_dir "$EMBEDDINGS_DIR" \
-    --rbm_model_path "$RBM_MODEL_PATH"
+    --rbm_model_path "$RBM_MODEL_PATH" \
+    --esm2_model "$ESM2_MODEL" \
+    --esmc_model "$ESMC_MODEL"
 
 src/pipeline/stages/03_predict_test_embeddings.sh \
     --embeddings_dir "$EMBEDDINGS_DIR" \
@@ -132,7 +140,9 @@ if [[ "$DATASET_NAME" == "RR" ]]; then
         --splits_dir "$SPLITS_DIR" \
         --embeddings_dir "$EMBEDDINGS_DIR" \
         --model_dir "$MODEL_DIR" \
-        --rbm_model_path "$RBM_MODEL_PATH"
+        --rbm_model_path "$RBM_MODEL_PATH" \
+        --esm2_model "$ESM2_MODEL" \
+        --esmc_model "$ESMC_MODEL"
 else
     echo "Skipping conditioned RBM stages for dataset=${DATASET_NAME}"
 fi

@@ -63,24 +63,24 @@ for train_csv in "${train_csvs[@]}"; do
         continue
     fi
 
-    plm_model_dir="$MODEL_DIR/pLM_encoder_${num_train_samples}_supervised"
-    prediction_file="$PREDICTIONS_DIR/test.embedding.plm_supervised.ntrain_${num_train_samples}.predictions.h5"
+    esm2_model_dir="$MODEL_DIR/esm2_encoder_${num_train_samples}_supervised"
+    prediction_file="$PREDICTIONS_DIR/test.embedding.esm2_supervised.ntrain_${num_train_samples}.predictions.h5"
 
     echo "Running RR supervised PLM finetuning for ntrain=${num_train_samples}"
     python src/plm/train_supervised.py \
         --train_csv "$train_csv" \
         --test_csv "$SPLITS_DIR/test.csv" \
-        --folder_params "$plm_model_dir" \
+        --folder_params "$esm2_model_dir" \
         --epochs 50 \
         --seed "$SEED" \
         --bf16
 
     echo "Running RR supervised PLM predictions for ntrain=${num_train_samples}"
     python src/predict_from_plm_supervised_freeze.py \
-        --model_dir "$plm_model_dir" \
+        --model_dir "$esm2_model_dir" \
         --train_csv "$train_csv" \
         --query "$SPLITS_DIR/test.csv" \
         --output "$prediction_file" \
-        --info "train-${num_train_samples}-plm_supervised" \
+        --info "train-${num_train_samples}-esm2_supervised" \
         --bf16
 done

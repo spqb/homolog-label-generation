@@ -13,6 +13,7 @@ from tqdm import trange
 from transformers import AutoModel, AutoTokenizer
 
 from utils import load_query_data
+from plm.pooling import boundary_special_token_ids, residue_mean_pool
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -38,7 +39,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output",
         type=str,
-        default="predictions.plm_supervised.h5",
+        default="predictions.esm2_supervised.h5",
         help="Output .h5 file with predictions.",
     )
     parser.add_argument(
@@ -116,6 +117,7 @@ def _predict(
 ) -> Tuple[np.ndarray, np.ndarray]:
     all_logits = []
     use_autocast = use_bf16 and device.type == "cuda"
+    special_token_ids = boundary_special_token_ids(tokenizer)
     for i in trange(0, len(sequences), batch_size, desc="Predicting"):
         batch = sequences[i : i + batch_size]
         tokenized = _tokenize_sequences(batch, max_length, tokenizer)
@@ -125,9 +127,12 @@ def _predict(
             autocast_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if use_autocast else nullcontext()
             with autocast_ctx:
                 outputs = model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
-                token_embeddings = outputs.last_hidden_state[:, 1:, :]
-                token_mask = attention_mask[:, 1:].unsqueeze(-1).to(token_embeddings.dtype)
-                pooled = (token_embeddings * token_mask).sum(dim=1) / token_mask.sum(dim=1).clamp(min=1e-9)
+                pooled = residue_mean_pool(
+                    outputs.last_hidden_state,
+                    input_ids,
+                    attention_mask,
+                    special_token_ids,
+                )
                 logits = head(pooled)
         all_logits.append(logits.cpu())
 
@@ -248,7 +253,7 @@ def main(config: Dict[str, Any]) -> None:
                 labels_array = labels_array.astype("S")
             test_group.create_dataset("labels_true", data=labels_array)
 
-        preds_group = test_group.create_group("predictions/plm_supervised")
+        preds_group = test_group.create_group("predictions/esm2_supervised")
         if pred_labels.dtype.kind in ("U", "O"):
             pred_labels = pred_labels.astype("S")
         preds_group.create_dataset("labels_pred", data=pred_labels)

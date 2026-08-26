@@ -8,27 +8,44 @@ Usage:
   src/pipeline/stages/02_embed_splits.sh \
     --splits_dir <path> \
     --output_dir <path> \
-    --rbm_model_path <path>
+    [--rbm_model_path <path>] \
+    [--models <onehot|rbm|esm2|esmc> ...] \
+    [--esm2_model <model-id>] \
+    [--esmc_model <model-id>]
 
-Creates onehot, RBM, and PLM embeddings for train_<N>.csv and test.csv files.
+Creates embeddings for train_<N>.csv and test.csv files. By default, all four
+models are run. --rbm_model_path is required only when rbm is selected.
 EOF
 }
 
 SPLITS_DIR=""
 OUTPUT_DIR=""
 RBM_MODEL_PATH=""
+ESM2_MODEL="facebook/esm2_t33_650M_UR50D"
+ESMC_MODEL="biohub/ESMC-600M"
+EMBEDDING_MODELS=(onehot rbm esm2 esmc)
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --splits_dir) SPLITS_DIR="$2"; shift 2 ;;
         --output_dir) OUTPUT_DIR="$2"; shift 2 ;;
         --rbm_model_path|--rbm_embedding_model) RBM_MODEL_PATH="$2"; shift 2 ;;
+        --models)
+            shift
+            EMBEDDING_MODELS=()
+            while [[ $# -gt 0 && "$1" != --* ]]; do
+                EMBEDDING_MODELS+=("$1")
+                shift
+            done
+            ;;
+        --esm2_model) ESM2_MODEL="$2"; shift 2 ;;
+        --esmc_model) ESMC_MODEL="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
 done
 
-if [[ -z "$SPLITS_DIR" || -z "$OUTPUT_DIR" || -z "$RBM_MODEL_PATH" ]]; then
+if [[ -z "$SPLITS_DIR" || -z "$OUTPUT_DIR" || ${#EMBEDDING_MODELS[@]} -eq 0 ]]; then
     echo "Missing required arguments." >&2
     usage
     exit 1
@@ -39,12 +56,19 @@ if [[ ! -d "$SPLITS_DIR" ]]; then
     exit 1
 fi
 
-if [[ ! -f "$RBM_MODEL_PATH" ]]; then
+if [[ " ${EMBEDDING_MODELS[*]} " == *" rbm "* && ! -f "$RBM_MODEL_PATH" ]]; then
     echo "rbm_model_path does not exist: $RBM_MODEL_PATH" >&2
     exit 1
 fi
 
 mkdir -p "$OUTPUT_DIR"
+
+for embedding_model in "${EMBEDDING_MODELS[@]}"; do
+    case "$embedding_model" in
+        onehot|rbm|esm2|esmc) ;;
+        *) echo "Invalid embedding model: $embedding_model" >&2; exit 1 ;;
+    esac
+done
 
 shopt -s nullglob
 csv_files=("$SPLITS_DIR"/*.csv)
@@ -57,7 +81,7 @@ fi
 
 run_embedding_model() {
     local embedding_model="$1"
-    local query_file file_name split_name num_train info output_file sequence_column script_path
+    local query_file file_name split_name num_train info output_file sequence_column script_path model_id
 
     case "$embedding_model" in
         onehot)
@@ -68,7 +92,7 @@ run_embedding_model() {
             script_path="src/encoding/rbm_encoding.py"
             sequence_column="sequence_align"
             ;;
-        plm)
+        esm2|esmc)
             script_path="src/encoding/plm_encoding.py"
             sequence_column="sequence"
             ;;
@@ -113,18 +137,24 @@ run_embedding_model() {
                 --model "$RBM_MODEL_PATH" \
                 --column_sequences "$sequence_column"
         else
+            if [[ "$embedding_model" == "esm2" ]]; then
+                model_id="$ESM2_MODEL"
+            else
+                model_id="$ESMC_MODEL"
+            fi
             python "$script_path" \
                 --query "$query_file" \
                 --output "$output_file" \
                 --info "$info" \
+                --model "$model_id" \
                 --column_sequences "$sequence_column" \
                 --bf16
         fi
     done
 }
 
-run_embedding_model onehot
-run_embedding_model rbm
-run_embedding_model plm
+for embedding_model in "${EMBEDDING_MODELS[@]}"; do
+    run_embedding_model "$embedding_model"
+done
 
 echo "All split embeddings created in: $OUTPUT_DIR"

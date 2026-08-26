@@ -10,7 +10,9 @@ Usage:
     --splits_dir <path> \
     --embeddings_dir <path> \
     --model_dir <path> \
-    --rbm_model_path <path>
+    --rbm_model_path <path> \
+    [--esm2_model <model-id>] \
+    [--esmc_model <model-id>]
 
 Embeds generated RBM samples and predicts labels for them.
 EOF
@@ -21,6 +23,8 @@ SPLITS_DIR=""
 EMBEDDINGS_DIR=""
 MODEL_DIR=""
 RBM_MODEL_PATH=""
+ESM2_MODEL="facebook/esm2_t33_650M_UR50D"
+ESMC_MODEL="biohub/ESMC-600M"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -29,6 +33,8 @@ while [[ $# -gt 0 ]]; do
         --embeddings_dir) EMBEDDINGS_DIR="$2"; shift 2 ;;
         --model_dir) MODEL_DIR="$2"; shift 2 ;;
         --rbm_model_path|--rbm_checkpoint) RBM_MODEL_PATH="$2"; shift 2 ;;
+        --esm2_model) ESM2_MODEL="$2"; shift 2 ;;
+        --esmc_model) ESMC_MODEL="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
@@ -165,19 +171,26 @@ for label_dir in "${label_dirs[@]}"; do
                 --test_h5 "$embedding_h5" \
                 --output_path "$label_dir/samples.predictions.rbm.h5"
             ;;
-        plm)
-            embedding_h5="$label_dir/samples.embedding.plm.h5"
-            train_h5="$EMBEDDINGS_DIR/train_${num_train_samples}.embedding.plm.h5"
+        esm2|esmc)
+            embedding_h5="$label_dir/samples.embedding.${model}.h5"
+            train_h5="$EMBEDDINGS_DIR/train_${num_train_samples}.embedding.${model}.h5"
 
             if [[ ! -f "$train_h5" ]]; then
                 echo "Skipping $label_name: missing train embedding $train_h5" >&2
                 continue
             fi
 
+            if [[ "$model" == "esm2" ]]; then
+                model_id="$ESM2_MODEL"
+            else
+                model_id="$ESMC_MODEL"
+            fi
+
             python src/encoding/plm_encoding.py \
                 --query "$samples_csv" \
                 --output "$embedding_h5" \
-                --info "generated-${num_train_samples}-plm" \
+                --info "generated-${num_train_samples}-${model}" \
+                --model "$model_id" \
                 --column_sequences sequence_align \
                 --column_labels "$label_column" \
                 --column_headers header \
@@ -186,28 +199,28 @@ for label_dir in "${label_dirs[@]}"; do
             python src/predict_from_embeddings.py \
                 --train_h5 "$train_h5" \
                 --test_h5 "$embedding_h5" \
-                --output_path "$label_dir/samples.predictions.plm.h5"
+                --output_path "$label_dir/samples.predictions.${model}.h5"
             ;;
-        plm_supervised)
+        esm2_supervised)
             train_csv="$SPLITS_DIR/train_${num_train_samples}.csv"
-            plm_model_dir="$MODEL_DIR/pLM_encoder_${num_train_samples}_supervised"
+            esm2_model_dir="$MODEL_DIR/esm2_encoder_${num_train_samples}_supervised"
 
             if [[ ! -f "$train_csv" ]]; then
                 echo "Skipping $label_name: missing train CSV $train_csv" >&2
                 continue
             fi
 
-            if [[ ! -d "$plm_model_dir" ]]; then
-                echo "Skipping $label_name: missing supervised PLM model $plm_model_dir" >&2
+            if [[ ! -d "$esm2_model_dir" ]]; then
+                echo "Skipping $label_name: missing supervised ESM2 model $esm2_model_dir" >&2
                 continue
             fi
 
             python src/predict_from_plm_supervised_freeze.py \
-                --model_dir "$plm_model_dir" \
+                --model_dir "$esm2_model_dir" \
                 --train_csv "$train_csv" \
                 --query "$samples_csv" \
-                --output "$label_dir/samples.predictions.plm_supervised.h5" \
-                --info "generated-${num_train_samples}-plm_supervised" \
+                --output "$label_dir/samples.predictions.esm2_supervised.h5" \
+                --info "generated-${num_train_samples}-esm2_supervised" \
                 --column_sequences sequence_align \
                 --column_labels "$label_column" \
                 --column_headers header \

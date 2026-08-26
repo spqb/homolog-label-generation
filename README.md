@@ -5,7 +5,7 @@ This repository contains the code accompanying the study on light-supervision fo
 - how well different sequence representations support fine-grained label prediction under scarce supervision;
 - whether inferred labels can be propagated to the rest of the family and then used to train label-aware generative models.
 
-The pipeline compares one-hot encodings, family-specific RBM embeddings, and ESM2-based protein language model embeddings for specificity prediction, and then uses the resulting annotations to train conditioned RBMs for label-aware sequence generation.
+The pipeline compares one-hot encodings, family-specific RBM embeddings, and frozen ESM2 650M and ESM C 600M protein language model embeddings for specificity prediction, and then uses the resulting annotations to train conditioned RBMs for label-aware sequence generation.
 
 ## Repository contents
 
@@ -40,6 +40,7 @@ For the `RR` dataset, the pipeline also includes supervised ESM2 fine-tuning whe
 
 - `src/pipeline/run_experiments.sh`: run all configured experiments
 - `src/pipeline/run_case.sh`: run a single dataset / seed / threshold case
+- `src/pipeline/run_rebuttal_annotation_analysis.sh`: regenerate only the RR, `t1=0.4`, ESM2/ESM-C annotation artifacts for seeds 1–10, then plot all annotation methods
 
 ## Installation
 
@@ -85,7 +86,7 @@ The figures explored in the original notebooks can also be generated through the
 
 - `analysis/analyze_splits.py`: train/test split composition, sequence-identity histograms, and PCA projections
 - `analysis/analyze_classification.py`: repeated classification summaries, macro-F1 plots, and ROC curves across seeds
-- `analysis/analyze_generated_samples.py`: conditioned-generation comparisons, symmetric-KL summaries, self-consistency plots, and generated-sample quality analyses
+- `analysis/analyze_generated_samples.py`: conditioned-generation comparisons, symmetric-KL and Jensen–Shannon summaries, global and label-wise pairwise connected-correlation recovery, and self-consistency plots
 
 Typical usage examples:
 

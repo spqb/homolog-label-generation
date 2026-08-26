@@ -207,9 +207,10 @@ Supported embedding modes:
 | --- | --- | --- | --- |
 | `onehot` | `src/encoding/onehot_encoding.py` | none | `sequence_align` |
 | `rbm` | `src/encoding/rbm_encoding.py` | `--checkpoint <rbm_model_path>` | `sequence_align` |
-| `plm` | `src/encoding/plm_encoding.py` | optional checkpoint | `sequence` |
+| `esm2` | `src/encoding/plm_encoding.py` | `facebook/esm2_t33_650M_UR50D` | `sequence` |
+| `esmc` | `src/encoding/plm_encoding.py` | `biohub/ESMC-600M` | `sequence` |
 
-It creates embeddings for `onehot`, `rbm`, and `plm`. The PLM calls pass
+It creates embeddings for `onehot`, `rbm`, `esm2`, and `esmc`. Both pLM calls pass
 `--bf16`, which enables bfloat16 autocast only when CUDA and GPU support are
 available.
 
@@ -263,15 +264,16 @@ headers
 labels   # only when labels are present
 ```
 
-## Stage 2c: PLM Encoding
+## Stage 2c: ESM2 and ESM C Encoding
 
 ### `src/encoding/plm_encoding.py`
 
 This script embeds unaligned protein sequences with a Hugging Face protein
-language model. By default it uses:
+language model. The pipeline invokes it with:
 
 ```text
 facebook/esm2_t33_650M_UR50D
+biohub/ESMC-600M
 ```
 
 Main behavior:
@@ -281,7 +283,8 @@ Main behavior:
 - Reads sequences, headers, and labels from the input CSV.
 - Tokenizes sequences with padding/truncation to `--max_length`, default `256`.
 - Runs the model in evaluation mode.
-- Removes the CLS token and mean-pools non-padding token embeddings.
+- Mean-pools amino-acid token embeddings while excluding boundary and padding
+  tokens.
 - Saves one embedding vector per sequence.
 
 Output HDF5 datasets:
@@ -396,7 +399,7 @@ facebook/esm2_t33_650M_UR50D
 Output directory:
 
 ```text
-models/RR/t1_<t1>/seed_<seed>/pLM_encoder_<N>_supervised/
+models/RR/t1_<t1>/seed_<seed>/esm2_encoder_<N>_supervised/
 ```
 
 The active call in `src/pipeline/stages/04_train_rr_supervised_plm.sh` uses:
@@ -405,7 +408,7 @@ The active call in `src/pipeline/stages/04_train_rr_supervised_plm.sh` uses:
 python src/plm/train_supervised.py \
   --train_csv "$SPLITS_DIR/train_<N>.csv" \
   --test_csv "$SPLITS_DIR/test.csv" \
-  --folder_params "$MODEL_DIR/pLM_encoder_<N>_supervised" \
+  --folder_params "$MODEL_DIR/esm2_encoder_<N>_supervised" \
   --epochs 50 \
   --seed "$SEED" \
   --bf16
@@ -433,13 +436,13 @@ Output file:
 
 ```text
 outputs/RR/t1_<t1>/seed_<seed>/predictions/
-+-- test.embedding.plm_supervised.ntrain_<N>.predictions.h5
++-- test.embedding.esm2_supervised.ntrain_<N>.predictions.h5
 ```
 
 Output HDF5 structure:
 
 ```text
-info                         # train-<N>-plm_supervised
+info                         # train-<N>-esm2_supervised
 train/
   headers
   labels_true
@@ -447,7 +450,7 @@ test/
   headers
   labels_true
   predictions/
-    plm_supervised/
+    esm2_supervised/
       labels_pred
       labels_probs
 ```
@@ -610,11 +613,12 @@ Model-specific behavior:
 - `RBM_labels_<N>_rbm`: RBM-encodes samples with the original RBM embedding
   checkpoint, then calls `src/predict_from_embeddings.py` with
   `train_<N>.embedding.rbm.h5`.
-- `RBM_labels_<N>_plm`: PLM-encodes samples, then calls
-  `src/predict_from_embeddings.py` with `train_<N>.embedding.plm.h5`.
-- `RBM_labels_<N>_plm_supervised`: calls
+- `RBM_labels_<N>_esm2` and `RBM_labels_<N>_esmc`: encode samples with the
+  matching frozen model, then call `src/predict_from_embeddings.py` with the
+  corresponding `train_<N>.embedding.<model>.h5` file.
+- `RBM_labels_<N>_esm2_supervised`: calls
   `src/predict_from_plm_supervised_freeze.py` using the matching
-  `pLM_encoder_<N>_supervised` model.
+  `esm2_encoder_<N>_supervised` model.
 
 ### `src/prediction/predict_from_csv_true.py`
 
