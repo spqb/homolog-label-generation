@@ -14,6 +14,7 @@ from transformers import AutoModel, AutoTokenizer
 from transformers import EarlyStoppingCallback, Trainer, TrainingArguments
 from transformers import DataCollatorWithPadding
 
+from sequence_length import DEFAULT_MAX_RESIDUES, LENGTH_HELP, resolve_token_length
 from pooling import boundary_special_token_ids, residue_mean_pool
 
 
@@ -75,7 +76,7 @@ def get_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--batch_size", type=int, default=16, help="Per-device batch size.")
     parser.add_argument("--epochs", type=int, default=50, help="Number of epochs.")
-    parser.add_argument("--max_length", type=int, default=256, help="Maximum tokenized sequence length.")
+    parser.add_argument("--max_length", type=int, default=DEFAULT_MAX_RESIDUES, help=LENGTH_HELP)
     parser.add_argument("--lr", type=float, default=2e-5, help="Learning rate.")
     parser.add_argument("--weight_decay", type=float, default=0.001, help="Weight decay.")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout used in classification head.")
@@ -207,11 +208,14 @@ def main(args):
 
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.backbone, do_lower_case=False)
+    length_sequences = list(train_dataset[args.column_sequences]) + list(val_dataset[args.column_sequences])
+    args.max_length = resolve_token_length(length_sequences, tokenizer, args.max_length, report=True)
 
     def preprocess(example):
         tokenized = tokenizer(
             example[args.column_sequences],
             truncation=True,
+            padding="max_length",
             max_length=args.max_length,
         )
         tokenized["labels"] = label2id[str(example[args.column_labels])]

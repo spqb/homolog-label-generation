@@ -1,0 +1,73 @@
+[defaults]
+train_sizes = [100, 500, 1000, 2000, 5000]
+classification_methods = ["onehot", "rbm", "esm2", "esmc", "ankh"]
+generation_methods = ["true", "onehot", "rbm", "ankh"]
+max_length = 512
+samples_per_label = 3000
+esm2_model = "facebook/esm2_t33_650M_UR50D"
+esmc_model = "biohub/ESMC-600M"
+ankh_model = "ElnaggarLab/ankh-base"
+
+[datasets.RR]
+source_csv = "data/RR/RR.csv"
+embedding_rbm = "models/RR/embedding_rbm_ptt.h5"
+t1 = ["0.4", "0.7"]
+seeds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+supervised_plm = true
+gibbs_steps = 1000
+generation_enabled = true
+
+[datasets.Globin]
+source_csv = "data/Globin/Globin_morkos.csv"
+embedding_rbm = "models/Globin/embedding_rbm.h5"
+t1 = ["0.7"]
+seeds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+generation_enabled = false
+
+[datasets.SH3]
+source_csv = "data/SH3/SH3.csv"
+embedding_rbm = "models/SH3/embedding_rbm.h5"
+t1 = ["0.7"]
+seeds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+generation_enabled = false
+
+[datasets.cm]
+source_csv = "data/cm/cm_sequences_merged.csv"
+embedding_rbm = "models/cm/embedding_rbm.h5"
+t1 = ["0.7"]
+seeds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+generation_enabled = false
+
+[profiles.main]
+datasets = ["RR", "Globin", "SH3", "cm"]
+stages = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+[profiles.classification]
+datasets = ["RR", "Globin", "SH3", "cm"]
+stages = [1, 2, 3, 4, 9]
+
+[profiles.annotation-refresh]
+datasets = ["RR", "Globin", "SH3", "cm"]
+stages = [2, 3, 9]
+
+[profiles.generation]
+datasets = ["RR"]
+stages = [5, 6, 7, 8, 9]
+
+[profiles.generation-pca]
+datasets = ["RR"]
+stages = [9]
+seeds = [1]
+
+[profiles.missing-labels]
+datasets = ["RR"]
+stages = []
+t1 = ["0.4"]
+seeds = [1, 2, 3]
+train_sizes = [100, 1000]
+
+[profiles.smoke]
+datasets = ["RR"]
+stages = [1, 2, 3, 9]
+t1 = ["0.4"]
+seeds = [1]

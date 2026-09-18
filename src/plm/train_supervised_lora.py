@@ -19,6 +19,7 @@ from transformers import AutoModel, AutoTokenizer
 from transformers import EarlyStoppingCallback, TrainerCallback
 from transformers import DataCollatorWithPadding, Trainer, TrainingArguments
 
+from sequence_length import DEFAULT_MAX_RESIDUES, LENGTH_HELP, resolve_token_length
 from pooling import boundary_special_token_ids, residue_mean_pool
 
 
@@ -114,7 +115,7 @@ def get_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--batch_size", type=int, default=16, help="Per-device batch size.")
     parser.add_argument("--epochs", type=int, default=50, help="Number of epochs.")
-    parser.add_argument("--max_length", type=int, default=256, help="Maximum tokenized sequence length.")
+    parser.add_argument("--max_length", type=int, default=DEFAULT_MAX_RESIDUES, help=LENGTH_HELP)
     parser.add_argument("--lr", type=float, default=2e-5, help="Learning rate.")
     parser.add_argument("--weight_decay", type=float, default=0.001, help="Weight decay.")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout used in classification head.")
@@ -217,7 +218,7 @@ def _embed_dataset(
         return np.empty((0, int(backbone.config.hidden_size)), dtype=np.float32)
 
     def tokenize_batch(batch):
-        return tokenizer(batch[sequence_col], truncation=True, max_length=max_length)
+        return tokenizer(batch[sequence_col], truncation=True, padding="max_length", max_length=max_length)
 
     tokenized = dataset.map(tokenize_batch, batched=True, remove_columns=dataset.column_names)
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
@@ -286,11 +287,17 @@ def main(args):
 
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.backbone, do_lower_case=False)
+    length_sequences = list(train_dataset[args.column_sequences]) + list(val_dataset[args.column_sequences])
+    if args.test_csv:
+        test_dataset = cast(Dataset, load_dataset("csv", data_files=args.test_csv)["train"])
+        length_sequences += list(test_dataset[args.column_sequences])
+    args.max_length = resolve_token_length(length_sequences, tokenizer, args.max_length, report=True)
 
     def preprocess(example):
         tokenized = tokenizer(
             example[args.column_sequences],
             truncation=True,
+            padding="max_length",
             max_length=args.max_length,
         )
         tokenized["labels"] = label2id[str(example[args.column_labels])]
@@ -330,7 +337,6 @@ def main(args):
         baseline_metrics["validation"] = _compute_metrics(val_labels, val_prob, len(label2id))
 
     if args.test_csv:
-        test_dataset = cast(Dataset, load_dataset("csv", data_files=args.test_csv)["train"])
         test_embeddings = _embed_dataset(
             test_dataset,
             tokenizer,
@@ -419,7 +425,6 @@ def main(args):
 
     if args.test_csv:
         print("Evaluating on test set...")
-        test_dataset = cast(Dataset, load_dataset("csv", data_files=args.test_csv)["train"])
         tokenized_test = cast(Dataset, test_dataset.map(preprocess, remove_columns=test_dataset.column_names))
 
         predictions = trainer.predict(tokenized_test)

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 import numpy as np
 import h5py
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel, T5EncoderModel
 from tqdm import tqdm
 
 # Add parent directory to path to import train modules
@@ -16,6 +16,7 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 from utils import load_query_data
+from plm.sequence_length import DEFAULT_MAX_RESIDUES, LENGTH_HELP, resolve_token_length
 from plm.pooling import boundary_special_token_ids, residue_mean_pool
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -30,17 +31,20 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--column_sequences", type=str, default="sequence", help="Column name in the input .csv file containing the sequences.")
     parser.add_argument("--column_labels", type=str, default="label", help="Column name in the input .csv file containing the labels.")
     parser.add_argument("--column_headers", type=str, default="header", help="Column name in the input .csv file containing the sequence identifiers.")
-    parser.add_argument("--max_length", type=int, default=256, help="Maximum sequence length.")
+    parser.add_argument("--max_length", type=int, default=DEFAULT_MAX_RESIDUES, help=LENGTH_HELP)
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for encoding.")
     parser.add_argument("--bf16", action="store_true", help="Enable bfloat16 mixed precision for embedding computation (CUDA only).")
     
     return parser
 
 
-def tokenize_sequences(batch, max_length, tokenizer):
+def tokenize_sequences(batch, max_length, tokenizer, is_ankh=False):
     batch = [str(sequence) for sequence in batch]
+    if is_ankh:
+        batch = [list(sequence) for sequence in batch]
     feat = tokenizer(
         batch,
+        **({"is_split_into_words": True} if is_ankh else {}),
         max_length=max_length,
         return_tensors="pt",
         padding="max_length",
@@ -123,7 +127,8 @@ def model_last_hidden_state(model_output: Any) -> torch.Tensor:
     raise ValueError("The protein language model did not return residue embeddings.")
         
         
-def compute_embeddings(model, sequences, tokenizer, device, batch_size=32, max_length=256, use_bf16=False):
+def compute_embeddings(model, sequences, tokenizer, device, batch_size=32, max_length=DEFAULT_MAX_RESIDUES, use_bf16=False, is_ankh=False):
+    max_length = resolve_token_length(sequences, tokenizer, max_length)
     all_embeddings = []
     special_token_ids = boundary_special_token_ids(tokenizer)
     use_autocast = use_bf16 and device.type == "cuda"
@@ -131,7 +136,7 @@ def compute_embeddings(model, sequences, tokenizer, device, batch_size=32, max_l
     for i in range(0, len(sequences), batch_size):
         pbar.update(min(batch_size, len(sequences) - i))
         batch = sequences[i:i+batch_size]
-        tokenized_batch = tokenize_sequences(batch, max_length, tokenizer)
+        tokenized_batch = tokenize_sequences(batch, max_length, tokenizer, is_ankh=is_ankh)
         input_ids = tokenized_batch["input_ids"].to(device)
         attention_mask = tokenized_batch["attention_mask"].to(device)
         with torch.no_grad():
@@ -147,7 +152,7 @@ def compute_embeddings(model, sequences, tokenizer, device, batch_size=32, max_l
             attention_mask,
             special_token_ids,
         )
-        all_embeddings.append(embeddings.cpu())
+        all_embeddings.append(embeddings.float().cpu())
     pbar.close()
     
     return torch.cat(all_embeddings, dim=0)
@@ -170,11 +175,17 @@ def main(config):
     checkpoint = config.get("checkpoint")
     if checkpoint is not None:
         checkpoint = checkpoint.strip()
+    is_ankh = "ankh" in config["model"].lower()
+    if is_ankh and checkpoint:
+        raise ValueError("Fine-tuned --checkpoint loading is not supported for Ankh.")
     is_esmc = "esmc" in config["model"].lower()
     if is_esmc and checkpoint:
         raise ValueError("Fine-tuned --checkpoint loading is not supported for ESM-C.")
 
-    if is_esmc:
+    if is_ankh:
+        tokenizer = AutoTokenizer.from_pretrained(config["model"])
+        model = T5EncoderModel.from_pretrained(config["model"])
+    elif is_esmc:
         print("Loading ESM-C tokenizer and model through the official esm package...")
         model, tokenizer = load_esmc_model_and_tokenizer(config["model"])
     elif checkpoint:
@@ -222,6 +233,10 @@ def main(config):
         column_labels=config["column_labels"]
     )
 
+    token_limit = resolve_token_length(
+        seq_query, tokenizer, config.get("max_length"), report=True,
+    )
+
     print("Embedding the query dataset...")
     X_test = compute_embeddings(
         model,
@@ -229,8 +244,9 @@ def main(config):
         tokenizer,
         device,
         batch_size=config["batch_size"],
-        max_length=config["max_length"],
+        max_length=config.get("max_length"),
         use_bf16=use_bf16,
+        is_ankh=is_ankh,
     ).numpy()
 
     output_path = config["output"]
@@ -239,6 +255,10 @@ def main(config):
     
     print("Saving the query dataset's embeddings...")
     with h5py.File(output_path, "w") as f:
+        f.attrs["model_id"] = config["model"]
+        f.attrs["max_length_tokens"] = token_limit
+        f.attrs["max_length_residues"] = token_limit - tokenizer.num_special_tokens_to_add(pair=False)
+        f.attrs["pooling"] = "residue_mean"
         f.create_dataset("info", data=np.asarray(config.get("info", ""), dtype="S"))
         f.create_dataset("embeddings", data=X_test)
         f.create_dataset("headers", data=np.asarray(headers_query).astype("S"))

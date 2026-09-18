@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 
 from utils import load_query_data
+from plm.sequence_length import DEFAULT_MAX_RESIDUES, LENGTH_HELP, resolve_token_length
 from plm.pooling import boundary_special_token_ids, residue_mean_pool
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -45,7 +46,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--column_sequences", type=str, default="sequence", help="CSV sequence column.")
     parser.add_argument("--column_labels", type=str, default="label", help="CSV label column.")
     parser.add_argument("--column_headers", type=str, default="header", help="CSV header column.")
-    parser.add_argument("--max_length", type=int, default=256, help="Maximum tokenized sequence length.")
+    parser.add_argument("--max_length", type=int, default=DEFAULT_MAX_RESIDUES, help=LENGTH_HELP)
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for prediction.")
     parser.add_argument("--bf16", action="store_true", help="Enable bf16 mixed precision (CUDA only).")
     return parser
@@ -112,9 +113,10 @@ def _predict(
     tokenizer,
     device,
     batch_size=32,
-    max_length=256,
+    max_length=DEFAULT_MAX_RESIDUES,
     use_bf16=False,
 ) -> Tuple[np.ndarray, np.ndarray]:
+    max_length = resolve_token_length(sequences, tokenizer, max_length, report=True)
     all_logits = []
     use_autocast = use_bf16 and device.type == "cuda"
     special_token_ids = boundary_special_token_ids(tokenizer)

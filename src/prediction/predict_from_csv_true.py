@@ -8,6 +8,7 @@ from typing import Optional, Tuple, cast
 
 import h5py
 import numpy as np
+import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
@@ -23,7 +24,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Train a logistic regression on a CSV dataset and predict on "
-            "samples.embedding.true.h5 files under query_source/seed_*/RBM_labels_all_true."
+            "generated-sequence embedding HDF5 files."
         )
     )
     parser.add_argument("--train_csv", type=str, required=True, help="Path to the training dataset in .csv format.")
@@ -31,14 +32,16 @@ def get_parser() -> argparse.ArgumentParser:
         "--query_source",
         type=str,
         default=None,
-        help="Base folder containing seed_<i>/RBM_labels_all_true.",
+        help="Legacy base folder containing seed_<i>/RBM_labels_all_true.",
     )
     parser.add_argument(
         "--query_dir",
         type=str,
         default=None,
-        help="Single RBM_labels_all_true folder to process.",
+        help="Legacy single RBM_labels_all_true folder to process.",
     )
+    parser.add_argument("--query_h5", default=None, help="Explicit generated-sequence embedding HDF5 file.")
+    parser.add_argument("--output_path", default=None, help="Explicit prediction HDF5 output (requires --query_h5).")
     parser.add_argument("--column_sequences", type=str, default="sequence_align", help="CSV column containing sequences.")
     parser.add_argument("--column_labels", type=str, default="label", help="CSV column containing labels.")
     parser.add_argument("--column_headers", type=str, default="header", help="CSV column containing headers.")
@@ -62,6 +65,22 @@ def _onehot_encode_sequences(sequences: list[str], tokens: list[str]) -> np.ndar
     n_tokens = len(tokens)
     onehot = np.eye(n_tokens)[encoded]
     return onehot.reshape(n_sequences, sequence_length * n_tokens)
+
+
+def _filter_labeled_training_rows(sequences, headers, labels):
+    """Keep aligned rows with observed labels, including numeric/boolean labels."""
+    labels = np.asarray(labels, dtype=object)
+    valid = np.asarray([
+        not pd.isna(label) and not (isinstance(label, str) and not label.strip())
+        for label in labels
+    ], dtype=bool)
+    if not valid.any():
+        raise ValueError("Training CSV contains no observed labels.")
+    retained_labels = _normalize_labels(np.asarray(labels[valid].tolist()))
+    if len(pd.unique(retained_labels)) < 2:
+        raise ValueError("Training CSV must contain at least two observed label classes.")
+    print(f"Excluded {int((~valid).sum())} training rows with missing labels.")
+    return np.asarray(sequences)[valid], np.asarray(headers)[valid], retained_labels
 
 
 def _load_embeddings_h5(path: str) -> Tuple[np.ndarray, Optional[np.ndarray], np.ndarray]:
@@ -126,10 +145,11 @@ def main() -> None:
 
     if not os.path.exists(args.train_csv):
         raise FileNotFoundError(f"Training CSV not found: {args.train_csv}")
-    if not args.query_source and not args.query_dir:
-        raise ValueError("Either --query_source or --query_dir is required.")
-    if args.query_source and args.query_dir:
-        raise ValueError("Use only one of --query_source or --query_dir.")
+    query_modes = sum(bool(value) for value in (args.query_source, args.query_dir, args.query_h5))
+    if query_modes != 1:
+        raise ValueError("Use exactly one of --query_source, --query_dir, or --query_h5.")
+    if bool(args.output_path) != bool(args.query_h5):
+        raise ValueError("--query_h5 and --output_path must be used together.")
     if args.query_source and not os.path.isdir(args.query_source):
         raise NotADirectoryError(f"query_source does not exist: {args.query_source}")
     if args.query_dir and not os.path.isdir(args.query_dir):
@@ -147,6 +167,7 @@ def main() -> None:
     if labels is None:
         raise ValueError("Training CSV must contain labels.")
 
+    sequences, headers, labels = _filter_labeled_training_rows(sequences, headers, labels)
     X_train = _onehot_encode_sequences(sequences, tokens)
     y_train = _normalize_labels(np.asarray(labels))
     train_headers = np.asarray(headers)
@@ -164,7 +185,9 @@ def main() -> None:
     logreg.fit(X_train_scaled, y_train)
     print(f"Logistic regression trained in {time.time() - start_time:.2f}s")
 
-    if args.query_dir:
+    if args.query_h5:
+        prediction_jobs = [(args.query_h5, args.output_path)]
+    elif args.query_dir:
         label_dirs = [args.query_dir]
     else:
         seed_dirs = [
@@ -184,13 +207,19 @@ def main() -> None:
                 continue
             label_dirs.append(label_dir)
 
-    num_runs = 0
-    for label_dir in label_dirs:
-        test_h5 = os.path.join(label_dir, "samples.embedding.true.h5")
-        output_path = os.path.join(label_dir, "samples.predictions.true.h5")
+    if not args.query_h5:
+        prediction_jobs = [
+            (
+                os.path.join(label_dir, "samples.embedding.true.h5"),
+                os.path.join(label_dir, "samples.predictions.true.h5"),
+            )
+            for label_dir in label_dirs
+        ]
 
+    num_runs = 0
+    for test_h5, output_path in prediction_jobs:
         if not os.path.isfile(test_h5):
-            print(f"Skipping {label_dir}: missing {test_h5}")
+            print(f"Skipping missing embedding file: {test_h5}")
             continue
 
         X_test, y_test, h_test = _load_embeddings_h5(test_h5)

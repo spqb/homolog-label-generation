@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", required=True, help="Dataset name, e.g. RR or SH3.")
     parser.add_argument("--t1", required=True, help="Train/test threshold identifier, e.g. 0.4 or 0.7.")
     parser.add_argument("--seed", type=int, required=True, help="Seed identifier.")
+    parser.add_argument("--outputs-root", type=Path, default=REPO_ROOT / "outputs")
     parser.add_argument(
         "--train-sizes",
         type=int,
@@ -53,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=REPO_ROOT / "images" / "analysis",
+        default=None,
         help="Directory where plots are written.",
     )
     return parser.parse_args()
@@ -188,9 +189,11 @@ def plot_pca_projection(base_dir: Path, train_size: int, output_path: Path) -> N
     test_pca = pca.transform(np.eye(len(tokens))[test_encoded].reshape(test_encoded.shape[0], -1))
 
     labels = sorted(np.unique(np.concatenate([train_frame["label"].to_numpy(), test_frame["label"].to_numpy()])))
-    if len(labels) > 8:
-        raise ValueError("Too many unique labels to plot in a 2x4 grid.")
-    fig, axes = plt.subplots(2, 4, figsize=(20, 10), dpi=192, squeeze=False)
+    if not len(labels):
+        raise ValueError("The train and test splits contain no labels to plot.")
+    ncols = min(4, len(labels))
+    nrows = (len(labels) + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4.5 * nrows), dpi=192, squeeze=False)
 
     for axis, label in zip(axes.flat, labels):
         train_mask = train_frame["label"].to_numpy() == label
@@ -211,8 +214,8 @@ def plot_pca_projection(base_dir: Path, train_size: int, output_path: Path) -> N
 def main() -> None:
     args = parse_args()
     configure_matplotlib(args.use_latex)
-    base_dir = REPO_ROOT / "outputs" / args.dataset / f"t1_{args.t1}" / f"seed_{args.seed}"
-    output_dir = args.output_dir
+    base_dir = args.outputs_root / args.dataset / f"t1_{args.t1}" / f"seed_{args.seed}"
+    output_dir = args.output_dir or args.outputs_root / "images" / "splits" / args.dataset / f"t1_{args.t1}"
     output_dir.mkdir(parents=True, exist_ok=True)
     pca_train_size = args.pca_train_size if args.pca_train_size is not None else args.identity_train_size
 

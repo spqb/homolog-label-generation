@@ -12,6 +12,7 @@ Usage:
     --model_dir <path> \
     --seed <int> \
     [--enabled 0|1] \
+    [--max_length <residues; default 512>] \
     [--min_ntrain 1000]
 EOF
 }
@@ -23,6 +24,7 @@ MODEL_DIR=""
 SEED=""
 ENABLED=0
 MIN_NTRAIN=1000
+MAX_LENGTH=512
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -32,6 +34,7 @@ while [[ $# -gt 0 ]]; do
         --model_dir) MODEL_DIR="$2"; shift 2 ;;
         --seed) SEED="$2"; shift 2 ;;
         --enabled) ENABLED="$2"; shift 2 ;;
+        --max_length) MAX_LENGTH="$2"; shift 2 ;;
         --min_ntrain) MIN_NTRAIN="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
@@ -73,6 +76,7 @@ for train_csv in "${train_csvs[@]}"; do
         --folder_params "$esm2_model_dir" \
         --epochs 50 \
         --seed "$SEED" \
+        --max_length "$MAX_LENGTH" \
         --bf16
 
     echo "Running RR supervised PLM predictions for ntrain=${num_train_samples}"
@@ -82,5 +86,6 @@ for train_csv in "${train_csvs[@]}"; do
         --query "$SPLITS_DIR/test.csv" \
         --output "$prediction_file" \
         --info "train-${num_train_samples}-esm2_supervised" \
+        --max_length "$MAX_LENGTH" \
         --bf16
 done

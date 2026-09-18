@@ -9,7 +9,7 @@ import pandas as pd
 from sklearn.metrics import f1_score, roc_auc_score, roc_curve
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 METHOD_LABELS = {
@@ -17,6 +17,7 @@ METHOD_LABELS = {
     "rbm": "RBM",
     "esm2": "ESM2 650M",
     "esmc": "ESM C 600M",
+    "ankh": "Ankh",
     "esm2_supervised": "Fine-tuned ESM2",
     "true": "True",
     "onlytrain": "Train-only",
@@ -42,6 +43,12 @@ def load_prediction_file(path: Path) -> dict[str, np.ndarray]:
             raise ValueError(f"No predictor groups found in {path}")
 
         loaded: dict[str, np.ndarray] = {"labels_true": y_true}
+        # Project classifiers order probability columns by sorted training labels.
+        # Prefer these over test labels, which can omit a class in a given split.
+        if "train" in handle and "labels_true" in handle["train"]:
+            loaded["class_labels"] = np.unique(decode_array(handle["train"]["labels_true"][()]))
+        else:
+            loaded["class_labels"] = np.unique(y_true)
         for predictor_name in predictor_names:
             group = predictor_group[predictor_name]
             loaded[f"{predictor_name}/labels_pred"] = decode_array(group["labels_pred"][()])

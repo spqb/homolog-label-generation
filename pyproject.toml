@@ -1,0 +1,33 @@
+[project]
+name = "delight-specificity"
+version = "0.1.0"
+description = "Protein-family annotation and label-aware sequence generation"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "accelerate==1.9.0",
+    "adabmdca==0.7.5",
+    "annadca==0.2.3",
+    "biopython==1.85",
+    "datasets==4.0.0",
+    "esm @ git+https://github.com/Biohub/esm.git@c94ed8d",
+    "h5py==3.14.0",
+    "numpy==2.4.1",
+    "pandas==2.3.1",
+    "peft==0.16.0",
+    "pyarrow==21.0.0",
+    "pyyaml==6.0.2",
+    "rbms==0.5.0",
+    "scikit-learn==1.7.1",
+    "scipy==1.16.0",
+    "seaborn==0.13.2",
+    "torch==2.9.1",
+    "torchvision==0.24.1",
+    "tqdm==4.67.1",
+    "transformers @ git+https://github.com/Biohub/transformers.git@3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf",
+    "sentencepiece==0.2.0",
+]
+
+[tool.uv]
+# This repository runs scripts directly; it is not an installable Python package.
+package = false
