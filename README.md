@@ -85,14 +85,14 @@ protein-model weights nor experiment data.
 Download the data and RBM embedding checkpoints from Zenodo:
 
 ```bash
-wget https://zenodo.org/records/20719564/files/Data_delight.zip
+wget https://zenodo.org/records/22828924/files/proj_spec.zip
 ```
 
 This downloads a zip archive named `Data_delight.zip`. Once the download has
 finished, create the local `data/` and `models/` directories with:
 
 ```bash
-./setup_data.sh Data_delight.zip
+./setup_data.sh proj_spec.zip
 ```
 
 The setup script requires `unzip` and extracts datasets into `data/` and
