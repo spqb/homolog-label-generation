@@ -14,10 +14,13 @@ from transformers import AutoModel, AutoTokenizer
 from transformers import EarlyStoppingCallback, Trainer, TrainingArguments
 from transformers import DataCollatorWithPadding
 
+from sequence_length import DEFAULT_MAX_RESIDUES, LENGTH_HELP, resolve_token_length
+from pooling import boundary_special_token_ids, residue_mean_pool
+
 
 class ESMSequenceClassifier(nn.Module):
     """
-    Sequence classifier with mean pooling over token embeddings after removing CLS token.
+    Sequence classifier with mean pooling over amino-acid token embeddings.
 
     Head architecture:
       Dropout -> Dense -> Tanh -> Dropout -> Dense -> Softmax
@@ -27,6 +30,7 @@ class ESMSequenceClassifier(nn.Module):
         self,
         backbone_name: str,
         num_labels: int,
+        special_token_ids: List[int],
         dropout: float = 0.1,
     ):
         super().__init__()
@@ -34,6 +38,7 @@ class ESMSequenceClassifier(nn.Module):
         self.backbone = AutoModel.from_pretrained(backbone_name)
         hidden_size = int(self.backbone.config.hidden_size)
         self.num_labels = num_labels
+        self.special_token_ids = special_token_ids
 
         self.classifier = nn.Linear(hidden_size, num_labels, bias=True)
         self.softmax = nn.Softmax(dim=-1)
@@ -41,10 +46,12 @@ class ESMSequenceClassifier(nn.Module):
     def forward(self, input_ids, attention_mask, labels=None):
         outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
 
-        # Remove CLS token (position 0), then mean-pool non-padding tokens
-        token_embeddings = outputs.last_hidden_state[:, 1:, :]
-        token_mask = attention_mask[:, 1:].unsqueeze(-1).to(token_embeddings.dtype)
-        pooled = (token_embeddings * token_mask).sum(dim=1) / token_mask.sum(dim=1).clamp(min=1e-9)
+        pooled = residue_mean_pool(
+            outputs.last_hidden_state,
+            input_ids,
+            attention_mask,
+            self.special_token_ids,
+        )
 
         logits = self.classifier(pooled)
         probabilities = self.softmax(logits)
@@ -69,7 +76,7 @@ def get_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--batch_size", type=int, default=16, help="Per-device batch size.")
     parser.add_argument("--epochs", type=int, default=50, help="Number of epochs.")
-    parser.add_argument("--max_length", type=int, default=256, help="Maximum tokenized sequence length.")
+    parser.add_argument("--max_length", type=int, default=DEFAULT_MAX_RESIDUES, help=LENGTH_HELP)
     parser.add_argument("--lr", type=float, default=2e-5, help="Learning rate.")
     parser.add_argument("--weight_decay", type=float, default=0.001, help="Weight decay.")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout used in classification head.")
@@ -201,11 +208,14 @@ def main(args):
 
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.backbone, do_lower_case=False)
+    length_sequences = list(train_dataset[args.column_sequences]) + list(val_dataset[args.column_sequences])
+    args.max_length = resolve_token_length(length_sequences, tokenizer, args.max_length, report=True)
 
     def preprocess(example):
         tokenized = tokenizer(
             example[args.column_sequences],
             truncation=True,
+            padding="max_length",
             max_length=args.max_length,
         )
         tokenized["labels"] = label2id[str(example[args.column_labels])]
@@ -218,6 +228,7 @@ def main(args):
     model = ESMSequenceClassifier(
         backbone_name=args.backbone,
         num_labels=len(label2id),
+        special_token_ids=boundary_special_token_ids(tokenizer),
         dropout=args.dropout,
     )
     _freeze_backbone_layers(model.backbone, args.train_last_n)

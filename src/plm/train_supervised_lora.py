@@ -19,10 +19,13 @@ from transformers import AutoModel, AutoTokenizer
 from transformers import EarlyStoppingCallback, TrainerCallback
 from transformers import DataCollatorWithPadding, Trainer, TrainingArguments
 
+from sequence_length import DEFAULT_MAX_RESIDUES, LENGTH_HELP, resolve_token_length
+from pooling import boundary_special_token_ids, residue_mean_pool
+
 
 class ESMSequenceClassifier(nn.Module):
     """
-    Sequence classifier with mean pooling over token embeddings after removing CLS token.
+    Sequence classifier with mean pooling over amino-acid token embeddings.
 
     Head architecture:
       Dropout -> Dense -> Tanh -> Dropout -> Dense -> Softmax
@@ -32,6 +35,7 @@ class ESMSequenceClassifier(nn.Module):
         self,
         backbone_name: str,
         num_labels: int,
+        special_token_ids: List[int],
         dropout: float = 0.1,
         lora_rank: int = 8,
         lora_alpha: int = 16,
@@ -51,6 +55,7 @@ class ESMSequenceClassifier(nn.Module):
         )
         self.backbone = get_peft_model(backbone, lora_config)
         self.num_labels = num_labels
+        self.special_token_ids = special_token_ids
 
         # self.classifier = nn.Sequential(
         #     nn.Dropout(dropout),
@@ -65,10 +70,12 @@ class ESMSequenceClassifier(nn.Module):
     def forward(self, input_ids, attention_mask, labels=None):
         outputs = self.backbone(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
 
-        # Remove CLS token (position 0), then mean-pool non-padding tokens
-        token_embeddings = outputs.last_hidden_state[:, 1:, :]
-        token_mask = attention_mask[:, 1:].unsqueeze(-1).to(token_embeddings.dtype)
-        pooled = (token_embeddings * token_mask).sum(dim=1) / token_mask.sum(dim=1).clamp(min=1e-9)
+        pooled = residue_mean_pool(
+            outputs.last_hidden_state,
+            input_ids,
+            attention_mask,
+            self.special_token_ids,
+        )
 
         logits = self.classifier(pooled)
         probabilities = self.softmax(logits)
@@ -108,7 +115,7 @@ def get_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--batch_size", type=int, default=16, help="Per-device batch size.")
     parser.add_argument("--epochs", type=int, default=50, help="Number of epochs.")
-    parser.add_argument("--max_length", type=int, default=256, help="Maximum tokenized sequence length.")
+    parser.add_argument("--max_length", type=int, default=DEFAULT_MAX_RESIDUES, help=LENGTH_HELP)
     parser.add_argument("--lr", type=float, default=2e-5, help="Learning rate.")
     parser.add_argument("--weight_decay", type=float, default=0.001, help="Weight decay.")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout used in classification head.")
@@ -199,13 +206,6 @@ def _extract_logits(predictions) -> torch.Tensor:
     return torch.tensor(raw_logits)
 
 
-def _mean_pool(outputs, attention_mask: torch.Tensor) -> torch.Tensor:
-    token_embeddings = outputs.last_hidden_state[:, 1:, :]
-    token_mask = attention_mask[:, 1:].unsqueeze(-1).to(token_embeddings.dtype)
-    pooled = (token_embeddings * token_mask).sum(dim=1) / token_mask.sum(dim=1).clamp(min=1e-9)
-    return pooled
-
-
 def _embed_dataset(
     dataset: Dataset,
     tokenizer: AutoTokenizer,
@@ -218,7 +218,7 @@ def _embed_dataset(
         return np.empty((0, int(backbone.config.hidden_size)), dtype=np.float32)
 
     def tokenize_batch(batch):
-        return tokenizer(batch[sequence_col], truncation=True, max_length=max_length)
+        return tokenizer(batch[sequence_col], truncation=True, padding="max_length", max_length=max_length)
 
     tokenized = dataset.map(tokenize_batch, batched=True, remove_columns=dataset.column_names)
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
@@ -229,12 +229,13 @@ def _embed_dataset(
     backbone.eval()
 
     pooled_outputs: List[np.ndarray] = []
+    special_token_ids = boundary_special_token_ids(tokenizer)
     with torch.no_grad():
         for batch in tqdm(loader, desc="Embedding", leave=False):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             outputs = backbone(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
-            pooled = _mean_pool(outputs, attention_mask)
+            pooled = residue_mean_pool(outputs.last_hidden_state, input_ids, attention_mask, special_token_ids)
             pooled_outputs.append(pooled.cpu().numpy())
 
     return np.concatenate(pooled_outputs, axis=0)
@@ -286,11 +287,17 @@ def main(args):
 
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.backbone, do_lower_case=False)
+    length_sequences = list(train_dataset[args.column_sequences]) + list(val_dataset[args.column_sequences])
+    if args.test_csv:
+        test_dataset = cast(Dataset, load_dataset("csv", data_files=args.test_csv)["train"])
+        length_sequences += list(test_dataset[args.column_sequences])
+    args.max_length = resolve_token_length(length_sequences, tokenizer, args.max_length, report=True)
 
     def preprocess(example):
         tokenized = tokenizer(
             example[args.column_sequences],
             truncation=True,
+            padding="max_length",
             max_length=args.max_length,
         )
         tokenized["labels"] = label2id[str(example[args.column_labels])]
@@ -330,7 +337,6 @@ def main(args):
         baseline_metrics["validation"] = _compute_metrics(val_labels, val_prob, len(label2id))
 
     if args.test_csv:
-        test_dataset = cast(Dataset, load_dataset("csv", data_files=args.test_csv)["train"])
         test_embeddings = _embed_dataset(
             test_dataset,
             tokenizer,
@@ -346,6 +352,7 @@ def main(args):
     model = ESMSequenceClassifier(
         backbone_name=args.backbone,
         num_labels=len(label2id),
+        special_token_ids=boundary_special_token_ids(tokenizer),
         dropout=args.dropout,
         lora_rank=args.lora_rank,
         lora_alpha=args.lora_alpha,
@@ -418,7 +425,6 @@ def main(args):
 
     if args.test_csv:
         print("Evaluating on test set...")
-        test_dataset = cast(Dataset, load_dataset("csv", data_files=args.test_csv)["train"])
         tokenized_test = cast(Dataset, test_dataset.map(preprocess, remove_columns=test_dataset.column_names))
 
         predictions = trainer.predict(tokenized_test)

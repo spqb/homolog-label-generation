@@ -3,10 +3,11 @@ import torch
 import os
 import sys
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Any
 import numpy as np
 import h5py
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModel, T5EncoderModel
 from tqdm import tqdm
 
 # Add parent directory to path to import train modules
@@ -15,6 +16,8 @@ if src_path not in sys.path:
     sys.path.insert(0, src_path)
 
 from utils import load_query_data
+from plm.sequence_length import DEFAULT_MAX_RESIDUES, LENGTH_HELP, resolve_token_length
+from plm.pooling import boundary_special_token_ids, residue_mean_pool
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -23,48 +26,133 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", type=str, default="facebook/esm2_t33_650M_UR50D", help="Model identifier.")
     parser.add_argument("--checkpoint", type=str, default=None, help="Optional path to a fine-tuned backbone directory.")
     parser.add_argument("--query", type=str, default=None, help="Path to the query dataset in .csv or fasta format.")
-    parser.add_argument("--output", type=str, default="embeddings.esm2_t33_650M_UR50D.h5", help="Output file containing the query sequences embeddings.")
+    parser.add_argument("--output", type=str, default="embeddings.esm2.h5", help="Output file containing the query sequences embeddings.")
     parser.add_argument("--info", type=str, default="", help="Optional metadata string saved at the top level of the output .h5 file.")
     parser.add_argument("--column_sequences", type=str, default="sequence", help="Column name in the input .csv file containing the sequences.")
     parser.add_argument("--column_labels", type=str, default="label", help="Column name in the input .csv file containing the labels.")
     parser.add_argument("--column_headers", type=str, default="header", help="Column name in the input .csv file containing the sequence identifiers.")
-    parser.add_argument("--max_length", type=int, default=256, help="Maximum sequence length.")
+    parser.add_argument("--max_length", type=int, default=DEFAULT_MAX_RESIDUES, help=LENGTH_HELP)
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for encoding.")
     parser.add_argument("--bf16", action="store_true", help="Enable bfloat16 mixed precision for embedding computation (CUDA only).")
     
     return parser
 
 
-def tokenize_sequences(batch, max_length, tokenizer):
-    feat = tokenizer.batch_encode_plus(
-        batch, 
-        max_length=max_length, 
-        return_tensors='pt', 
-        padding='max_length', 
-        truncation=True
+def tokenize_sequences(batch, max_length, tokenizer, is_ankh=False):
+    batch = [str(sequence) for sequence in batch]
+    if is_ankh:
+        batch = [list(sequence) for sequence in batch]
+    feat = tokenizer(
+        batch,
+        **({"is_split_into_words": True} if is_ankh else {}),
+        max_length=max_length,
+        return_tensors="pt",
+        padding="max_length",
+        truncation=True,
     )
+    if "input_ids" not in feat and "sequence_tokens" in feat:
+        feat["input_ids"] = feat.pop("sequence_tokens")
     return feat
+
+
+def load_esmc_model_and_tokenizer(model_id: str) -> tuple[Any, Any]:
+    """Load ESM-C through EvolutionaryScale's official implementation."""
+    try:
+        from esm.models.esmc import EsmcForMaskedLM, EsmcTokenizer
+    except (ImportError, AttributeError):
+        try:
+            from esm.models.esmc import ESMC
+
+            model_name = "esmc_300m" if "300m" in model_id.lower() else "esmc_600m"
+            try:
+                model = ESMC.from_pretrained(model_name, device=torch.device("cpu"))
+            except ValueError as error:
+                if "does not contain a valid checkpoint" not in str(error):
+                    raise
+                model = load_legacy_esmc_checkpoint(ESMC, model_name)
+            return model, model.tokenizer
+        except (ImportError, AttributeError) as error:
+            raise RuntimeError(
+                "ESM-C requires the EvolutionaryScale 'esm' package. If 'fair-esm' "
+                "is also installed, uninstall it and reinstall 'esm' because both "
+                "packages use the same Python namespace."
+            ) from error
+    else:
+        tokenizer = EsmcTokenizer()
+        model = EsmcForMaskedLM.from_pretrained(model_id)
+        return model, tokenizer
+
+
+def load_legacy_esmc_checkpoint(esmc_class: Any, model_name: str) -> Any:
+    """Load old ESM-C snapshots whose weights live below data/weights/."""
+    from accelerate import init_empty_weights
+    from esm.tokenization import get_esmc_model_tokenizers
+    from esm.utils.constants.esm3 import data_root
+
+    architectures = {
+        "esmc_300m": (960, 15, 30, "esmc-300"),
+        "esmc_600m": (1152, 18, 36, "esmc-600"),
+    }
+    if model_name not in architectures:
+        raise ValueError(f"Unsupported legacy ESM-C model: {model_name}")
+
+    d_model, n_heads, n_layers, data_name = architectures[model_name]
+    checkpoint_root = Path(data_root(data_name))
+    weight_files = sorted(checkpoint_root.glob("data/weights/*.pth"))
+    if len(weight_files) != 1:
+        raise FileNotFoundError(
+            f"Expected exactly one ESM-C .pth file below {checkpoint_root / 'data/weights'}, "
+            f"found {len(weight_files)}."
+        )
+
+    print(f"Loading legacy ESM-C weights from: {weight_files[0]}")
+    with init_empty_weights():
+        model = esmc_class(
+            d_model=d_model,
+            n_heads=n_heads,
+            n_layers=n_layers,
+            tokenizer=get_esmc_model_tokenizers(),
+            use_flash_attn=True,
+        ).eval()
+    state_dict = torch.load(weight_files[0], map_location="cpu")
+    model.load_state_dict(state_dict, assign=True)
+    return model.eval()
+
+
+def model_last_hidden_state(model_output: Any) -> torch.Tensor:
+    if getattr(model_output, "last_hidden_state", None) is not None:
+        return model_output.last_hidden_state
+    if getattr(model_output, "embeddings", None) is not None:
+        return model_output.embeddings
+    raise ValueError("The protein language model did not return residue embeddings.")
         
         
-def compute_embeddings(model, sequences, tokenizer, device, batch_size=32, max_length=256, use_bf16=False):
+def compute_embeddings(model, sequences, tokenizer, device, batch_size=32, max_length=DEFAULT_MAX_RESIDUES, use_bf16=False, is_ankh=False):
+    max_length = resolve_token_length(sequences, tokenizer, max_length)
     all_embeddings = []
+    special_token_ids = boundary_special_token_ids(tokenizer)
     use_autocast = use_bf16 and device.type == "cuda"
     pbar = tqdm(total=len(sequences), leave=False)
     for i in range(0, len(sequences), batch_size):
         pbar.update(min(batch_size, len(sequences) - i))
         batch = sequences[i:i+batch_size]
-        tokenized_batch = tokenize_sequences(batch, max_length, tokenizer)
+        tokenized_batch = tokenize_sequences(batch, max_length, tokenizer, is_ankh=is_ankh)
         input_ids = tokenized_batch["input_ids"].to(device)
         attention_mask = tokenized_batch["attention_mask"].to(device)
         with torch.no_grad():
             autocast_ctx = torch.autocast(device_type="cuda", dtype=torch.bfloat16) if use_autocast else nullcontext()
             with autocast_ctx:
-                model_output = model(input_ids=input_ids, attention_mask=attention_mask)
-        # Remove CLS token (position 0), then mean-pool non-padding tokens
-        token_embeddings = model_output.last_hidden_state[:, 1:, :]
-        token_mask = attention_mask[:, 1:].unsqueeze(-1).to(token_embeddings.dtype)
-        embeddings = torch.sum(token_embeddings * token_mask, 1) / torch.sum(token_mask, 1)
-        all_embeddings.append(embeddings.cpu())
+                if model.__class__.__name__ == "ESMC":
+                    model_output = model(sequence_tokens=input_ids, sequence_id=attention_mask.bool())
+                else:
+                    model_output = model(input_ids=input_ids, attention_mask=attention_mask)
+        embeddings = residue_mean_pool(
+            model_last_hidden_state(model_output),
+            input_ids,
+            attention_mask,
+            special_token_ids,
+        )
+        all_embeddings.append(embeddings.float().cpu())
     pbar.close()
     
     return torch.cat(all_embeddings, dim=0)
@@ -84,13 +172,25 @@ def main(config):
     if use_bf16:
         print("Using bf16 autocast for embedding computation.")
 
-    print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(config["model"], do_lower_case=False)
-
     checkpoint = config.get("checkpoint")
     if checkpoint is not None:
         checkpoint = checkpoint.strip()
-    if checkpoint:
+    is_ankh = "ankh" in config["model"].lower()
+    if is_ankh and checkpoint:
+        raise ValueError("Fine-tuned --checkpoint loading is not supported for Ankh.")
+    is_esmc = "esmc" in config["model"].lower()
+    if is_esmc and checkpoint:
+        raise ValueError("Fine-tuned --checkpoint loading is not supported for ESM-C.")
+
+    if is_ankh:
+        tokenizer = AutoTokenizer.from_pretrained(config["model"])
+        model = T5EncoderModel.from_pretrained(config["model"])
+    elif is_esmc:
+        print("Loading ESM-C tokenizer and model through the official esm package...")
+        model, tokenizer = load_esmc_model_and_tokenizer(config["model"])
+    elif checkpoint:
+        print("Loading tokenizer...")
+        tokenizer = AutoTokenizer.from_pretrained(config["model"], do_lower_case=False)
         if not os.path.isdir(checkpoint):
             raise ValueError(f"Invalid checkpoint path: '{checkpoint}'. Expected a fine-tuned backbone directory.")
 
@@ -117,6 +217,8 @@ def main(config):
             state = torch.load(weights_path, map_location="cpu")
             model.load_state_dict(state, strict=False)
     else:
+        print("Loading tokenizer...")
+        tokenizer = AutoTokenizer.from_pretrained(config["model"], do_lower_case=False)
         print("Loading model...")
         model = AutoModel.from_pretrained(config["model"])
 
@@ -131,6 +233,10 @@ def main(config):
         column_labels=config["column_labels"]
     )
 
+    token_limit = resolve_token_length(
+        seq_query, tokenizer, config.get("max_length"), report=True,
+    )
+
     print("Embedding the query dataset...")
     X_test = compute_embeddings(
         model,
@@ -138,8 +244,9 @@ def main(config):
         tokenizer,
         device,
         batch_size=config["batch_size"],
-        max_length=config["max_length"],
+        max_length=config.get("max_length"),
         use_bf16=use_bf16,
+        is_ankh=is_ankh,
     ).numpy()
 
     output_path = config["output"]
@@ -148,6 +255,10 @@ def main(config):
     
     print("Saving the query dataset's embeddings...")
     with h5py.File(output_path, "w") as f:
+        f.attrs["model_id"] = config["model"]
+        f.attrs["max_length_tokens"] = token_limit
+        f.attrs["max_length_residues"] = token_limit - tokenizer.num_special_tokens_to_add(pair=False)
+        f.attrs["pooling"] = "residue_mean"
         f.create_dataset("info", data=np.asarray(config.get("info", ""), dtype="S"))
         f.create_dataset("embeddings", data=X_test)
         f.create_dataset("headers", data=np.asarray(headers_query).astype("S"))

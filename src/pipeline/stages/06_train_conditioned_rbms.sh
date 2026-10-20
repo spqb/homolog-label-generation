@@ -9,6 +9,9 @@ Usage:
     --datasets_dir <path> \
     --model_dir <path> \
     [--annadca_bin annadca] \
+    [--methods <true|onlytrain|onehot|rbm|esm2|esmc|ankh> ...] \
+    [--train_sizes <N> ...] \
+    [--skip_existing] \
     [--dry_run]
 
 Trains one conditioned RBM for each supported label column in each
@@ -20,6 +23,9 @@ DATASETS_DIR=""
 MODEL_DIR=""
 ANNADCA_BIN="annadca"
 DRY_RUN=0
+SKIP_EXISTING=0
+METHODS=()
+TRAIN_SIZES=()
 SEQUENCE_COLUMN="sequence_align"
 NAME_COLUMN="header"
 NEPOCHS="50000"
@@ -30,6 +36,17 @@ while [[ $# -gt 0 ]]; do
         --datasets_dir) DATASETS_DIR="$2"; shift 2 ;;
         --model_dir) MODEL_DIR="$2"; shift 2 ;;
         --annadca_bin) ANNADCA_BIN="$2"; shift 2 ;;
+        --methods)
+            shift; METHODS=()
+            while [[ $# -gt 0 && "$1" != --* ]]; do METHODS+=("$1"); shift; done
+            [[ ${#METHODS[@]} -gt 0 ]] || { echo "--methods requires method ids" >&2; exit 1; }
+            ;;
+        --train_sizes)
+            shift; TRAIN_SIZES=()
+            while [[ $# -gt 0 && "$1" != --* ]]; do TRAIN_SIZES+=("$1"); shift; done
+            [[ ${#TRAIN_SIZES[@]} -gt 0 ]] || { echo "--train_sizes requires integers" >&2; exit 1; }
+            ;;
+        --skip_existing) SKIP_EXISTING=1; shift ;;
         --dry_run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
@@ -61,8 +78,20 @@ if [[ ${#csv_files[@]} -eq 0 ]]; then
     exit 1
 fi
 
+# The ground-truth benchmark is independent of annotation budget and must use
+# the fullest available train--test union rather than the first (smallest) CSV.
+largest_dataset="${csv_files[-1]}"
+
 trained_true_label=0
 num_runs=0
+num_skipped=0
+
+contains() {
+    local wanted="$1"; shift
+    local value
+    for value in "$@"; do [[ "$value" == "$wanted" ]] && return 0; done
+    return 1
+}
 
 for csv_path in "${csv_files[@]}"; do
     filename="$(basename "$csv_path")"
@@ -74,6 +103,8 @@ for csv_path in "${csv_files[@]}"; do
     fi
 
     header_line="$(head -n 1 "$csv_path")"
+    # CSV writers commonly use CRLF; do not retain CR in the last column name.
+    header_line="${header_line%$'\r'}"
     IFS=',' read -r -a columns <<< "$header_line"
 
     label_cols=()
@@ -89,17 +120,42 @@ for csv_path in "${csv_files[@]}"; do
     fi
 
     for label_col in "${label_cols[@]}"; do
-        suffix="${label_col%_label}"
+        if [[ "$label_col" == "train_only" ]]; then
+            suffix="onlytrain"
+        else
+            suffix="${label_col%_label}"
+        fi
+
+        if [[ ${#METHODS[@]} -gt 0 ]] && ! contains "$suffix" "${METHODS[@]}"; then
+            continue
+        fi
 
         if [[ "$suffix" == "true" ]]; then
-            if [[ $trained_true_label -eq 1 ]]; then
-                echo "Skipping true_label for $csv_path: RBM_labels_all_true already trained."
+            if [[ "$csv_path" != "$largest_dataset" ]]; then
                 continue
             fi
-            output_model_dir="$MODEL_DIR/RBM_labels_all_true"
+            if [[ $trained_true_label -eq 1 ]]; then
+                echo "Skipping true_label for $csv_path: full-union True RBM already trained."
+                continue
+            fi
+            output_model_dir="$MODEL_DIR/RBM_labels_all_true_full"
             trained_true_label=1
         else
+            if [[ ${#TRAIN_SIZES[@]} -gt 0 ]] && ! contains "$ntrain" "${TRAIN_SIZES[@]}"; then
+                continue
+            fi
             output_model_dir="$MODEL_DIR/RBM_labels_${ntrain}_${suffix}"
+        fi
+
+        if [[ $SKIP_EXISTING -eq 1 && -s "$output_model_dir/params.h5" ]]; then
+            echo "Skipping completed training: $output_model_dir/params.h5"
+            num_skipped=$((num_skipped + 1))
+            continue
+        fi
+        if [[ -d "$output_model_dir" && ! -s "$output_model_dir/params.h5" ]]; then
+            echo "Incomplete model directory exists: $output_model_dir" >&2
+            echo "Remove it or finish the interrupted training before rerunning." >&2
+            exit 1
         fi
 
         cmd=(
@@ -122,7 +178,7 @@ for csv_path in "${csv_files[@]}"; do
 done
 
 if [[ $DRY_RUN -eq 1 ]]; then
-    echo "Dry run complete. Planned trainings: $num_runs"
+    echo "Dry run complete. Planned trainings: $num_runs; completed artifacts skipped: $num_skipped"
 else
-    echo "Training complete. Executed trainings: $num_runs"
+    echo "Training complete. Executed trainings: $num_runs; completed artifacts skipped: $num_skipped"
 fi

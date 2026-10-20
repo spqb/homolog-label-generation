@@ -36,6 +36,24 @@ def get_parser() -> argparse.ArgumentParser:
         default="logreg",
         help="Classifier name inside test/predictions used for test labels_pred when multiple are available.",
     )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=None,
+        help="Only import these prediction model ids (for example: ankh).",
+    )
+    parser.add_argument(
+        "--train_sizes",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Only prepare these training-set sizes.",
+    )
+    parser.add_argument(
+        "--merge_existing",
+        action="store_true",
+        help="Merge selected model columns into existing output CSVs, preserving other methods.",
+    )
     return parser
 
 
@@ -110,12 +128,22 @@ def main(args) -> None:
     if not h5_paths:
         raise ValueError(f"No .h5 files found under {input_dir}")
 
+    selected_models = set(args.models) if args.models else None
+    selected_train_sizes = {str(value) for value in args.train_sizes} if args.train_sizes else None
     grouped_rows: Dict[str, Dict[Tuple[str, str], Dict[str, str]]] = defaultdict(dict)
     grouped_models: Dict[str, set] = defaultdict(set)
 
     for h5_path in h5_paths:
         with h5py.File(h5_path, "r") as f:
-            _, n_train, model_name = _read_info(f, h5_path)
+            try:
+                _, n_train, model_name = _read_info(f, h5_path)
+            except ValueError as error:
+                print(f"Skipping unrelated HDF5 file {h5_path}: {error}")
+                continue
+            if selected_models is not None and model_name not in selected_models:
+                continue
+            if selected_train_sizes is not None and n_train not in selected_train_sizes:
+                continue
             grouped_models[n_train].add(model_name)
             model_col = f"{model_name}_label"
 
@@ -214,8 +242,46 @@ def main(args) -> None:
         out_df = out_df[ordered_cols]
 
         output_file = output_dir / f"rbm_dataset_ntrain_{n_train}.csv"
-        out_df.to_csv(output_file, index=False)
+        if args.merge_existing and output_file.exists():
+            existing = pd.read_csv(output_file, dtype=str, keep_default_na=False)
+            keys = ["header", "set"]
+            required = {*keys, "sequence_align", "true_label"}
+            missing = required - set(existing.columns)
+            if missing:
+                raise ValueError(f"Cannot merge into {output_file}: missing columns {sorted(missing)}")
+            if existing.duplicated(keys).any() or out_df.duplicated(keys).any():
+                raise ValueError(f"Cannot merge {output_file}: duplicate header/set keys")
+
+            incoming = out_df[keys + ["sequence_align", "true_label", *model_cols]]
+            merged = existing.merge(incoming, on=keys, how="outer", suffixes=("", "__incoming"), validate="one_to_one", indicator=True)
+            if not (merged["_merge"] == "both").all():
+                raise ValueError(f"Cannot merge {output_file}: incoming and existing sequence sets differ")
+            for base_col in ["sequence_align", "true_label"]:
+                incoming_col = f"{base_col}__incoming"
+                if not (merged[base_col].astype(str) == merged[incoming_col].astype(str)).all():
+                    raise ValueError(f"Cannot merge {output_file}: inconsistent {base_col} values")
+                merged.drop(columns=incoming_col, inplace=True)
+            for model_col in model_cols:
+                incoming_col = f"{model_col}__incoming"
+                if incoming_col in merged:
+                    merged[model_col] = merged.pop(incoming_col)
+            merged.drop(columns="_merge", inplace=True)
+            non_label_cols = ["header", "sequence_align", "set", "true_label"]
+            preserved_model_cols = sorted(
+                col for col in merged.columns if col.endswith("_label") and col != "true_label"
+            )
+            tail = ["train_only"] if "train_only" in merged else []
+            out_df = merged[non_label_cols + preserved_model_cols + tail]
+
+        temporary_file = output_file.with_suffix(".csv.tmp")
+        out_df.to_csv(temporary_file, index=False)
+        temporary_file.replace(output_file)
         print(f"Wrote {output_file} ({len(out_df)} rows)")
+
+    if selected_train_sizes is not None:
+        missing_sizes = selected_train_sizes - set(grouped_rows)
+        if missing_sizes:
+            raise ValueError(f"No matching prediction files for training sizes: {sorted(missing_sizes, key=int)}")
 
 
 if __name__ == "__main__":

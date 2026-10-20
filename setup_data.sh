@@ -8,12 +8,12 @@ Usage: ./setup_data.sh [ARCHIVE] [--force]
 Create the local data/ and models/ directories from the Zenodo archive.
 
 Arguments:
-  ARCHIVE   Path to Data_delight.zip. Defaults to ./Data_delight.zip.
+  ARCHIVE   Path to proj_spec.zip. Defaults to ./proj_spec.zip.
   --force   Replace existing data/ and models/ directories.
 EOF
 }
 
-ARCHIVE="Data_delight.zip"
+ARCHIVE="proj_spec.zip"
 FORCE=0
 
 while [[ $# -gt 0 ]]; do
@@ -40,7 +40,7 @@ done
 
 if [[ ! -f "$ARCHIVE" ]]; then
     echo "Archive not found: $ARCHIVE" >&2
-    echo "Download it from: https://zenodo.org/records/20719564/files/Data_delight.zip" >&2
+    echo "Download it from: https://zenodo.org/records/22828924/files/proj_spec.zip" >&2
     exit 1
 fi
 
@@ -57,9 +57,9 @@ trap cleanup EXIT
 
 unzip -q "$ARCHIVE" -d "$TMPDIR"
 
-EXTRACTED_ROOT="$TMPDIR/Data_delight"
-if [[ ! -d "$EXTRACTED_ROOT/data" || ! -d "$EXTRACTED_ROOT/rbm_models" ]]; then
-    echo "Unexpected archive layout. Expected Data_delight/data and Data_delight/rbm_models." >&2
+EXTRACTED_ROOT="$TMPDIR/proj_spec"
+if [[ ! -d "$EXTRACTED_ROOT/data" || ! -d "$EXTRACTED_ROOT/models" ]]; then
+    echo "Unexpected archive layout. Expected proj_spec/data and proj_spec/models." >&2
     exit 1
 fi
 
@@ -77,6 +77,6 @@ fi
 
 mkdir -p data models
 cp -R "$EXTRACTED_ROOT/data/." data/
-cp -R "$EXTRACTED_ROOT/rbm_models/." models/
+cp -R "$EXTRACTED_ROOT/models/." models/
 
 echo "Created data/ and models/ from $ARCHIVE."

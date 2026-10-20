@@ -212,5 +212,4 @@ data/
 outputs/
 test/
 wandb/
-images/
 tmp/
